@@ -600,6 +600,10 @@
    DRI_CONF_OPT_B(pan_force_enable_shader_atomics, def, \
                   "Enable fragmentStoresAndAtomics and vertexPipelineStoresAndAtomics on any architecture. (This may not work reliably and is for debug purposes only!)")
 
+#define DRI_CONF_PANVK_ENABLE_GS_XFB(def) \
+   DRI_CONF_OPT_B(panvk_enable_gs_xfb, def, \
+                  "Advertise experimental support for geometryShader and transformFeedback features")
+
 /**
  * \brief Turnip specific configuration options
  */

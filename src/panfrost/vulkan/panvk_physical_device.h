@@ -110,6 +110,7 @@ panvk_get_max_buffer_size(const struct panvk_physical_device *device);
 
 #ifdef PAN_ARCH
 void panvk_per_arch(get_physical_device_extensions)(
+   const struct panvk_instance *instance,
    const struct panvk_physical_device *device,
    struct vk_device_extension_table *ext);
 
