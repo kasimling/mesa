@@ -35,8 +35,8 @@
 
 void
 panvk_per_arch(get_physical_device_extensions)(
-   const struct panvk_physical_device *device,
    const struct panvk_instance *instance,
+   const struct panvk_physical_device *device,
    struct vk_device_extension_table *ext)
 {
    bool has_gralloc = vk_android_get_ugralloc() != NULL;
@@ -304,7 +304,7 @@ panvk_per_arch(get_physical_device_features)(
       .fullDrawIndexUint32 = true,
       .imageCubeArray = true,
       .independentBlend = true,
-      .geometryShader = false,
+      .geometryShader = instance->drirc.misc.enable_gs_xfb,
       .tessellationShader = false,
       .sampleRateShading = true,
       .dualSrcBlend = true,
@@ -331,7 +331,8 @@ panvk_per_arch(get_physical_device_features)(
          (PAN_ARCH >= 13 && instance->drirc.misc.enable_vertex_pipeline_stores_atomics) ||
          instance->drirc.misc.force_enable_shader_atomics,
       .fragmentStoresAndAtomics = true,
-      .shaderTessellationAndGeometryPointSize = false,
+      .shaderTessellationAndGeometryPointSize =
+        instance->drirc.misc.enable_gs_xfb,
       .shaderImageGatherExtended = true,
       .shaderStorageImageExtendedFormats = true,
       .shaderStorageImageMultisample = false,
@@ -1336,6 +1337,14 @@ panvk_per_arch(get_physical_device_properties)(
    snprintf(properties->driverName, VK_MAX_DRIVER_NAME_SIZE, "panvk");
    snprintf(properties->driverInfo, VK_MAX_DRIVER_INFO_SIZE,
             "Mesa " PACKAGE_VERSION MESA_GIT_SHA1);
+
+   if (instance->drirc.misc.enable_gs_xfb) {
+      properties->maxGeometryShaderInvocations = 32;
+      properties->maxGeometryInputComponents = 128;
+      properties->maxGeometryOutputComponents = 128;
+      properties->maxGeometryOutputVertices = 1024;
+      properties->maxGeometryTotalOutputComponents = 1024;
+   }
 
    /* VK_EXT_physical_device_drm */
    if (device->drm.primary_rdev) {
