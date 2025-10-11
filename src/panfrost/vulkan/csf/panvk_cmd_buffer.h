@@ -566,6 +566,7 @@ struct panvk_cmd_buffer {
       struct panvk_cs_state cs[PANVK_SUBQUEUE_COUNT];
       struct panvk_tls_state tls;
       bool contains_timestamp_queries;
+      bool uses_poly_heap;
 
       struct panvk_cond_render_state cond_render;
    } state;
@@ -1027,6 +1028,8 @@ vk_stages_to_subqueue_mask(struct panvk_device *dev,
 
 void panvk_per_arch(emit_barrier)(struct panvk_cmd_buffer *cmdbuf,
                                   struct panvk_cs_deps deps);
+
+VkResult panvk_per_arch(cmd_init_poly_heap)(struct panvk_cmd_buffer *cmdbuf);
 
 #if PAN_ARCH >= 14
 static inline void
