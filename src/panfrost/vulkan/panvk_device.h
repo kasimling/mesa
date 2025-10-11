@@ -39,6 +39,9 @@
 #define PANVK_JM_MAX_VERTICES_INDIRECT                (2000000)
 #define PANVK_JM_MAX_PER_VTX_ATTRIBUTES_INDIRECT_SIZE (18 * 4)
 
+/* 128 MiB */
+#define PANVK_POLY_HEAP_SIZE (1 << 27)
+
 struct panvk_precomp_cache;
 struct panvk_device_draw_context;
 
@@ -73,6 +76,7 @@ struct panvk_device {
 
    struct panvk_priv_bo *tiler_heap;
    struct panvk_priv_bo *indirect_varying_buffer;
+   struct panvk_priv_bo *poly_heap_buffer;
    struct panvk_priv_bo *sample_positions;
 
    struct {
@@ -115,6 +119,14 @@ struct panvk_device {
    } utrace;
 
    struct panvk_device_draw_context* draw_ctx;
+
+   struct {
+      /* Only used on CSF */
+      util_once_flag init_once;
+
+      /* GPU address of 'struct poly_heap' */
+      uint64_t state_addr;
+   } poly_heap;
 
    struct {
       struct pandecode_context *decode_ctx;
@@ -235,6 +247,8 @@ VkResult panvk_per_arch(device_check_status)(struct vk_device *vk_dev);
 #if PAN_ARCH >= 10
 VkResult panvk_per_arch(init_tiler_oom)(struct panvk_device *device);
 #endif
+
+VkResult panvk_per_arch(device_init_poly_heap)(struct panvk_device *dev);
 #endif
 
 #endif
