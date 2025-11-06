@@ -278,9 +278,9 @@ prepare_vs_driver_set(struct panvk_cmd_buffer *cmdbuf,
    if (!vs_driver_set_is_dirty(cmdbuf))
       return VK_SUCCESS;
 
+   const struct panvk_shader_desc_info *vs_desc_info =
+      &cmdbuf->state.gfx.vs.shader->desc_info;
    struct panvk_shader_desc_state *vs_desc_state = &cmdbuf->state.gfx.vs.desc;
-   const struct panvk_shader_variant *vs =
-      panvk_shader_hw_variant(cmdbuf->state.gfx.vs.shader);
    const struct vk_dynamic_graphics_state *dyns =
       &cmdbuf->vk.dynamic_graphics_state;
    const struct vk_vertex_input_state *vi = dyns->vi;
@@ -301,7 +301,7 @@ prepare_vs_driver_set(struct panvk_cmd_buffer *cmdbuf,
       vb_count = MAX2(vi->attributes[i].binding + 1, vb_count);
    }
 
-   uint32_t vb_offset = vs->desc_info.dyn_bufs.count + MAX_VS_ATTRIBS + 1;
+   uint32_t vb_offset = vs_desc_info->dyn_bufs.count + MAX_VS_ATTRIBS + 1;
    uint32_t desc_count = vb_offset + vb_count;
    uint32_t repeat_count = 1;
 
@@ -337,7 +337,7 @@ prepare_vs_driver_set(struct panvk_cmd_buffer *cmdbuf,
       }
 
       panvk_per_arch(cmd_fill_dyn_bufs)(
-         desc_state, &vs->desc_info,
+         desc_state, vs_desc_info,
          (struct mali_buffer_packed *)(&descs[MAX_VS_ATTRIBS + 1]));
 
       for (uint32_t i = 0; i < vb_count; i++) {
@@ -418,16 +418,16 @@ emit_varying_descs(const struct panvk_cmd_buffer *cmdbuf,
 static VkResult
 prepare_fs_driver_set(struct panvk_cmd_buffer *cmdbuf)
 {
+   const struct panvk_shader_desc_info *fs_desc_info =
+      &cmdbuf->state.gfx.fs.shader->desc_info;
    struct panvk_shader_desc_state *fs_desc_state = &cmdbuf->state.gfx.fs.desc;
-   const struct panvk_shader_variant *fs =
-      panvk_shader_only_variant(cmdbuf->state.gfx.fs.shader);
    const struct panvk_descriptor_state *desc_state =
       &cmdbuf->state.gfx.desc_state;
    /* If the shader is using LD_VAR_BUF[_IMM], we do not have to set up
     * Attribute Descriptors for varying loads. */
    const uint32_t desc_count =
-      fs->desc_info.fs_varying_attr_desc_count +
-      fs->desc_info.dyn_bufs.count + 1;
+      fs_desc_info->fs_varying_attr_desc_count +
+      fs_desc_info->dyn_bufs.count + 1;
    struct pan_ptr driver_set = panvk_cmd_alloc_dev_mem(
       cmdbuf, desc, desc_count * PANVK_DESCRIPTOR_SIZE, PANVK_DESCRIPTOR_SIZE);
    struct panvk_opaque_desc *descs = driver_set.cpu;
@@ -435,17 +435,17 @@ prepare_fs_driver_set(struct panvk_cmd_buffer *cmdbuf)
    if (desc_count && !driver_set.gpu)
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
-   if (fs->desc_info.fs_varying_attr_desc_count > 0)
+   if (fs_desc_info->fs_varying_attr_desc_count > 0)
       emit_varying_descs(cmdbuf, (struct mali_attribute_packed *)(&descs[0]));
 
    /* Dummy sampler always comes right after the varyings. */
-   const uint32_t sampler_idx = fs->desc_info.fs_varying_attr_desc_count;
+   const uint32_t sampler_idx = fs_desc_info->fs_varying_attr_desc_count;
    pan_cast_and_pack(&descs[sampler_idx], SAMPLER, cfg) {
       cfg.clamp_integer_array_indices = false;
    }
 
    panvk_per_arch(cmd_fill_dyn_bufs)(
-      desc_state, &fs->desc_info,
+      desc_state, fs_desc_info,
       (struct mali_buffer_packed *)(&descs[sampler_idx + 1]));
 
    fs_desc_state->driver_set.dev_addr = driver_set.gpu;
@@ -1702,7 +1702,7 @@ prepare_vs(struct panvk_cmd_buffer *cmdbuf, const struct panvk_draw_info *draw)
       &cmdbuf->vk.dynamic_graphics_state.ia;
    struct panvk_descriptor_state *desc_state = &cmdbuf->state.gfx.desc_state;
    struct panvk_shader_desc_state *vs_desc_state = &cmdbuf->state.gfx.vs.desc;
-   const struct panvk_shader_variant *vs =
+   UNUSED const struct panvk_shader_variant *vs =
       panvk_shader_hw_variant(cmdbuf->state.gfx.vs.shader);
    struct cs_builder *b =
       panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_VERTEX_TILER);
@@ -1714,6 +1714,9 @@ prepare_vs(struct panvk_cmd_buffer *cmdbuf, const struct panvk_draw_info *draw)
 
    if (gfx_state_dirty(cmdbuf, VS) || gfx_state_dirty(cmdbuf, DESC_STATE) ||
        vs_driver_set_is_dirty(cmdbuf)) {
+      const struct panvk_shader_desc_info *vs_desc_info =
+         &cmdbuf->state.gfx.vs.shader->desc_info;
+
       uint32_t repeat_count = 1;
 
       if (draw->indirect.draw_count > 1 &&
@@ -1721,7 +1724,7 @@ prepare_vs(struct panvk_cmd_buffer *cmdbuf, const struct panvk_draw_info *draw)
          repeat_count = draw->indirect.draw_count;
 
       result = panvk_per_arch(cmd_prepare_shader_res_table)(
-         cmdbuf, desc_state, &vs->desc_info, vs_desc_state, repeat_count);
+         cmdbuf, desc_state, vs_desc_info, vs_desc_state, repeat_count);
       if (result != VK_SUCCESS)
          return result;
 
@@ -1775,12 +1778,16 @@ prepare_fs(struct panvk_cmd_buffer *cmdbuf)
        (gfx_state_dirty(cmdbuf, VS) ||
         gfx_state_dirty(cmdbuf, FS) ||
         gfx_state_dirty(cmdbuf, DESC_STATE))) {
+
+      const struct panvk_shader_desc_info *fs_desc_info =
+         &cmdbuf->state.gfx.fs.shader->desc_info;
+
       VkResult result = prepare_fs_driver_set(cmdbuf);
       if (result != VK_SUCCESS)
          return result;
 
       result = panvk_per_arch(cmd_prepare_shader_res_table)(
-         cmdbuf, desc_state, &fs->desc_info, fs_desc_state, 1);
+         cmdbuf, desc_state, fs_desc_info, fs_desc_state, 1);
       if (result != VK_SUCCESS)
          return result;
    }
@@ -2428,8 +2435,14 @@ prepare_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info *draw)
    struct cs_builder *b =
       panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_VERTEX_TILER);
 
-   uint32_t used_set_mask =
-      vs->desc_info.used_set_mask | (fs ? fs->desc_info.used_set_mask : 0);
+   const struct panvk_shader_desc_info *vs_desc_info =
+      &cmdbuf->state.gfx.vs.shader->desc_info;
+   uint32_t used_set_mask = vs_desc_info->used_set_mask;
+   if (fs) {
+      const struct panvk_shader_desc_info *fs_desc_info =
+         &cmdbuf->state.gfx.fs.shader->desc_info;
+      used_set_mask |= fs_desc_info->used_set_mask;
+   }
 
    if (gfx_state_dirty(cmdbuf, DESC_STATE) || gfx_state_dirty(cmdbuf, VS) ||
        gfx_state_dirty(cmdbuf, FS)) {
