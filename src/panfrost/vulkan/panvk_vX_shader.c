@@ -190,6 +190,15 @@ panvk_lower_sysvals(nir_builder *b, nir_instr *instr, void *data)
    case nir_intrinsic_load_vertex_param_buffer_poly:
       val = load_sysval(b, graphics, bit_size, poly.vertex_params);
       break;
+   case nir_intrinsic_load_geometry_param_buffer_poly:
+      val = load_sysval(b, graphics, bit_size, poly.geometry_params);
+      break;
+   case nir_intrinsic_load_rasterization_stream:
+      val = load_sysval(b, graphics, bit_size, poly.rasterization_stream);
+      break;
+   case nir_intrinsic_load_provoking_last:
+      val = load_sysval(b, graphics, bit_size, poly.provoking_vertex);
+      break;
 
    default:
       return false;
@@ -948,7 +957,7 @@ panvk_lower_nir_io(nir_shader *nir)
    /* nir_lower_io just computes offsets based on the original deref and
     * lower_indirect_derefs ensures that the array derefs have a constant
     * index.  Constant-fold and copy-prop before we go into
-    * poly_nir_lower_sw_vs() so it sees actual constants.
+    * poly_nir_lower_sw_vs() or poly_nir_lower_gs() so it sees actual constants.
     */
    NIR_PASS(_, nir, nir_opt_copy_prop);
    NIR_PASS(_, nir, nir_opt_constant_folding);
@@ -1544,6 +1553,90 @@ panvk_compile_shader(struct panvk_device *dev,
       break;
    }
 
+   case MESA_SHADER_GEOMETRY: {
+      /* TODO: Multiview */
+      assert(inputs.view_mask == 0);
+
+      nir_shader *main = info->nir;
+
+      panvk_lower_nir(dev, main, info->set_layout_count,
+                      info->set_layouts, info->robustness,
+                      state, &shader->desc_info, false);
+
+      nir_assign_io_var_locations(main, nir_var_shader_in);
+      nir_assign_io_var_locations(main, nir_var_shader_out);
+      panvk_lower_nir_io(main);
+
+      nir_shader *count = NULL, *rast = NULL, *pre = NULL;
+      NIR_PASS(_, main, poly_nir_lower_gs, &count, &rast, &pre,
+               &shader->gs_info);
+
+      assert(!pre || pre->info.stage == MESA_SHADER_COMPUTE);
+      panvk_nir_make_compute_shader(count);
+      panvk_nir_make_compute_shader(main);
+      assert(rast->info.stage == MESA_SHADER_VERTEX);
+
+      /* The GS rasterization needs proper bases later on */
+      if (rast)
+         NIR_PASS(_, rast, nir_recompute_io_bases, nir_var_shader_out);
+
+      struct {
+         nir_shader *in;
+         struct panvk_shader_variant *out;
+      } variants[] = {
+         {main, &shader->variants[PANVK_GS_VARIANT_MAIN]},
+         {pre, &shader->variants[PANVK_GS_VARIANT_PRE]},
+         {count, &shader->variants[PANVK_GS_VARIANT_COUNT]},
+         {rast, &shader->variants[PANVK_GS_VARIANT_RAST]},
+      };
+
+      for (unsigned v = 0; v < ARRAY_SIZE(variants); ++v) {
+         if (variants[v].in == NULL)
+            continue;
+
+         struct pan_compile_inputs variant_inputs = inputs;
+
+         nir_shader *nir = variants[v].in;
+         struct panvk_shader_variant *variant = variants[v].out;
+
+         NIR_PASS(_, nir, poly_nir_lower_sysvals);
+         NIR_PASS(_, nir, nir_lower_global_vars_to_local);
+
+         variant->own_bin = true;
+
+         struct pan_varying_layout varying_layout;
+         if (variant - shader->variants == PANVK_GS_VARIANT_RAST) {
+            variant_inputs.trust_varying_flat_highp_types = true;
+            pan_varying_collect_formats(&varying_layout, nir,
+                                        variant_inputs.gpu_id,
+                                        variant_inputs.trust_varying_flat_highp_types,
+                                        true);
+            pan_build_varying_layout_compact(&varying_layout, nir,
+                                             variant_inputs.gpu_id);
+            variant_inputs.varying_layout = &varying_layout;
+         }
+
+         result = panvk_compile_nir(dev, nir, info->flags,
+                                    &variant_inputs, state,
+                                    noperspective_varyings, &shader->desc_info,
+                                    variant);
+         if (result != VK_SUCCESS)
+            break;
+      }
+
+      /* All of the variants except MAIN are cloned shaders, so we are
+       * responsible for freeing them */
+      for (unsigned v = 1; v < ARRAY_SIZE(variants); ++v)
+         ralloc_free(variants[v].in);
+
+      if (result != VK_SUCCESS) {
+         panvk_shader_destroy(&dev->vk, &shader->vk, pAllocator);
+         return result;
+      }
+
+      break;
+   }
+
    case MESA_SHADER_FRAGMENT: {
       struct panvk_shader_variant *variant =
          (struct panvk_shader_variant *)panvk_shader_only_variant(shader);
@@ -1964,6 +2057,12 @@ panvk_deserialize_shader(struct vk_device *vk_dev, struct blob_reader *blob,
       return result;
    }
 
+   if (shader->vk.stage == MESA_SHADER_GEOMETRY) {
+      blob_copy_bytes(blob, &shader->gs_info, sizeof(shader->gs_info));
+      if (blob->overrun)
+         return vk_error(device, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
+   }
+
    panvk_shader_foreach_variant(shader, variant) {
       result = panvk_deserialize_shader_variant(vk_dev, blob, pAllocator,
                                                 variant);
@@ -2062,6 +2161,9 @@ panvk_shader_serialize(struct vk_device *vk_dev,
    blob_write_uint8(blob, vk_shader->stage);
 
    shader_desc_info_serialize(blob, shader);
+
+   if (shader->vk.stage == MESA_SHADER_GEOMETRY)
+      blob_write_bytes(blob, &shader->gs_info, sizeof(shader->gs_info));
 
    panvk_shader_foreach_variant(shader, variant) {
       panvk_shader_serialize_variant(vk_dev, variant, blob);
