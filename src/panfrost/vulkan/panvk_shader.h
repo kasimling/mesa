@@ -181,12 +181,6 @@ struct panvk_graphics_sysvals {
       int32_t first_vertex;
       int32_t base_instance;
       uint32_t noperspective_varyings;
-
-      /* Size of an index in the index buffer or 0 for no indexing */
-      uint32_t index_size;
-
-      /* Address to struct poly_ia_state */
-      uint64_t ia_buffer;
    } vs;
 
    struct {
