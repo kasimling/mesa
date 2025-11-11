@@ -511,6 +511,44 @@ prepare_tes_desc(struct panvk_cmd_buffer *cmdbuf)
                               &cmdbuf->state.gfx.tes.desc);
 }
 
+static bool
+hw_vs_desc_dirty(struct panvk_cmd_buffer *cmdbuf)
+{
+   if (hw_vs_user_dirty(cmdbuf))
+      return true;
+
+   if (!cmdbuf->state.gfx.gs.shader || !cmdbuf->state.gfx.tes.shader)
+      return vs_desc_dirty(cmdbuf);
+
+   return gfx_state_dirty(cmdbuf, DESC_STATE);
+}
+
+static bool
+hw_vs_push_uniforms_dirty(struct panvk_cmd_buffer *cmdbuf)
+{
+   if (hw_vs_user_dirty(cmdbuf))
+      return true;
+
+   if (cmdbuf->state.gfx.gs.shader)
+      return gfx_state_dirty(cmdbuf, GS_PUSH_UNIFORMS);
+   else if (cmdbuf->state.gfx.tes.shader)
+      return gfx_state_dirty(cmdbuf, TES_PUSH_UNIFORMS);
+   else
+      return gfx_state_dirty(cmdbuf, VS_PUSH_UNIFORMS);
+}
+
+static struct panvk_shader_desc_state *
+get_hw_vs_desc_state(struct panvk_cmd_buffer *cmdbuf)
+{
+   if (cmdbuf->state.gfx.gs.shader) {
+      return &cmdbuf->state.gfx.gs.desc;
+   } else if (cmdbuf->state.gfx.tes.shader) {
+      return &cmdbuf->state.gfx.tes.desc;
+   } else {
+      return &cmdbuf->state.gfx.vs.desc;
+   }
+}
+
 static void
 emit_varying_descs(const struct panvk_cmd_buffer *cmdbuf,
                    struct mali_attribute_packed *descs)
@@ -1938,29 +1976,30 @@ get_render_ctx(struct panvk_cmd_buffer *cmdbuf)
 }
 
 static void
-prepare_vs(struct panvk_cmd_buffer *cmdbuf)
+prepare_hw_vs(struct panvk_cmd_buffer *cmdbuf)
 {
-   struct panvk_shader_desc_state *vs_desc_state = &cmdbuf->state.gfx.vs.desc;
-   const struct panvk_shader_variant *vs = get_vs_variant(cmdbuf);
+   struct panvk_shader_desc_state *desc_state = get_hw_vs_desc_state(cmdbuf);
+   const struct panvk_shader_variant *hw_vs = get_hw_vs(cmdbuf);
    struct cs_builder *b =
       panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_VERTEX_TILER);
 
    cs_update_vt_ctx(b) {
-      if (vs_desc_dirty(cmdbuf))
+      if (hw_vs_desc_dirty(cmdbuf))
          cs_move64_to(b, cs_sr_reg64(b, IDVS, VERTEX_SRT),
-                      vs_desc_state->res_table);
-      if (vs_user_dirty(cmdbuf) || gfx_state_dirty(cmdbuf, VS_PUSH_UNIFORMS))
+                      desc_state->res_table);
+
+      if (hw_vs_push_uniforms_dirty(cmdbuf))
          cs_move64_to(b, cs_sr_reg64(b, IDVS, VERTEX_FAU),
-                      cmdbuf->state.gfx.vs.push_uniforms |
-                         ((uint64_t)vs->fau.total_count << 56));
+                      cmdbuf->state.gfx.hw_vs.push_uniforms |
+                         ((uint64_t)hw_vs->fau.total_count << 56));
 
 #if PAN_ARCH >= 12
       if (gfx_state_dirty(cmdbuf, VS) ||
           gfx_state_dirty(cmdbuf, IDVS)) {
          const uint64_t spd_addr =
             cmdbuf->state.gfx.idvs.prim == MESA_PRIM_POINTS
-            ? panvk_priv_mem_dev_addr(vs->spds.all_points)
-            : panvk_priv_mem_dev_addr(vs->spds.all_triangles);
+            ? panvk_priv_mem_dev_addr(hw_vs->spds.all_points)
+            : panvk_priv_mem_dev_addr(hw_vs->spds.all_triangles);
          cs_move64_to(b, cs_sr_reg64(b, IDVS, VERTEX_SPD), spd_addr);
       }
 #else
@@ -1968,14 +2007,14 @@ prepare_vs(struct panvk_cmd_buffer *cmdbuf)
           gfx_state_dirty(cmdbuf, IDVS)) {
          const uint64_t pos_spd_addr =
             cmdbuf->state.gfx.idvs.prim == MESA_PRIM_POINTS
-            ? panvk_priv_mem_dev_addr(vs->spds.pos_points)
-            : panvk_priv_mem_dev_addr(vs->spds.pos_triangles);
+            ? panvk_priv_mem_dev_addr(hw_vs->spds.pos_points)
+            : panvk_priv_mem_dev_addr(hw_vs->spds.pos_triangles);
          cs_move64_to(b, cs_sr_reg64(b, IDVS, VERTEX_POS_SPD), pos_spd_addr);
       }
 
       if (gfx_state_dirty(cmdbuf, VS))
          cs_move64_to(b, cs_sr_reg64(b, IDVS, VERTEX_VARY_SPD),
-                      panvk_priv_mem_dev_addr(vs->spds.var));
+                      panvk_priv_mem_dev_addr(hw_vs->spds.var));
 #endif
    }
 }
@@ -2012,29 +2051,27 @@ static VkResult
 prepare_push_uniforms(struct panvk_cmd_buffer *cmdbuf,
                       const struct panvk_draw_info *draw)
 {
-   const struct panvk_shader_variant *vs = get_vs_variant(cmdbuf);
+   const struct panvk_shader_variant *hw_vs = get_hw_vs(cmdbuf);
    const struct panvk_shader_variant *fs =
       panvk_shader_only_variant(get_fs(cmdbuf));
    VkResult result;
 
    uint32_t vs_repeat_count = 1;
-   if (draw->indirect.buffer_dev_addr) {
-      /* For indirect draws, VS_PUSH_UNIFORMS are always dirty so it's safe to
-       * look at the draw info here.
-       */
-      assert(gfx_state_dirty(cmdbuf, VS_PUSH_UNIFORMS));
-      if (shader_uses_sysval(vs, graphics, vs.first_vertex) ||
-          shader_uses_sysval(vs, graphics, vs.base_instance))
-         vs_repeat_count = draw->indirect.draw_count;
-   }
+   if (hw_vs_push_uniforms_dirty(cmdbuf)) {
+      if (draw->indirect.buffer_dev_addr) {
+         /* For indirect draws, VS_PUSH_UNIFORMS are always dirty so it's safe to
+          * look at the draw info here.
+          */
+         assert(gfx_state_dirty(cmdbuf, VS_PUSH_UNIFORMS));
+         if (shader_uses_sysval(hw_vs, graphics, vs.first_vertex) ||
+             shader_uses_sysval(hw_vs, graphics, vs.base_instance))
+            vs_repeat_count = draw->indirect.draw_count;
+      }
 
-   if (vs_user_dirty(cmdbuf) || gfx_state_dirty(cmdbuf, VS_PUSH_UNIFORMS)) {
       struct pan_ptr push_uniforms;
       result = panvk_per_arch(cmd_prepare_gfx_push_uniforms)(
-         cmdbuf, vs, &push_uniforms, vs_repeat_count);
-      if (result != VK_SUCCESS)
-         return result;
-      cmdbuf->state.gfx.vs.push_uniforms = push_uniforms.gpu;
+         cmdbuf, hw_vs, &push_uniforms, vs_repeat_count);
+      cmdbuf->state.gfx.hw_vs.push_uniforms = push_uniforms.gpu;
    }
 
    if (fs &&
@@ -2637,7 +2674,7 @@ prepare_draw(struct panvk_cmd_buffer *cmdbuf,
    if (result != VK_SUCCESS)
       return result;
 
-   prepare_vs(cmdbuf);
+   prepare_hw_vs(cmdbuf);
    prepare_fs(cmdbuf);
 
    cs_update_vt_ctx(b) {
@@ -2979,7 +3016,7 @@ launch_indirect_draw(struct panvk_cmd_buffer *cmdbuf,
 {
    const struct cs_tracing_ctx *tracing_ctx =
       &cmdbuf->state.cs[PANVK_SUBQUEUE_VERTEX_TILER].tracing;
-   const struct panvk_shader_variant *vs = get_vs_variant(cmdbuf);
+   const struct panvk_shader_variant *vs = get_hw_vs(cmdbuf);
    struct cs_builder *b =
       panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_VERTEX_TILER);
 
@@ -3022,7 +3059,7 @@ launch_indirect_draw(struct panvk_cmd_buffer *cmdbuf,
    }
 
    if (patch_faus)
-      cs_move64_to(b, vs_fau_addr, cmdbuf->state.gfx.vs.push_uniforms);
+      cs_move64_to(b, vs_fau_addr, cmdbuf->state.gfx.hw_vs.push_uniforms);
 
    cs_move64_to(b, draw_params_addr, draw->indirect.buffer_dev_addr);
    cs_move32_to(b, draw_id, 0);
