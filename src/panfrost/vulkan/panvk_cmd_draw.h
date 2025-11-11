@@ -188,6 +188,10 @@ struct panvk_cmd_graphics_state {
    } idvs;
 
    struct {
+      uint64_t push_uniforms;
+   } hw_vs;
+
+   struct {
       const struct panvk_shader *shader;
       struct panvk_shader_desc_state desc;
    } gs;
@@ -205,7 +209,6 @@ struct panvk_cmd_graphics_state {
    struct {
       const struct panvk_shader *shader;
       struct panvk_shader_desc_state desc;
-      uint64_t push_uniforms;
 #if PAN_ARCH < 9
       uint64_t attribs;
       uint64_t attrib_bufs;
