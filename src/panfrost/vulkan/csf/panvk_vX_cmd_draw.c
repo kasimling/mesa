@@ -3024,10 +3024,6 @@ prepare_draw(struct panvk_cmd_buffer *cmdbuf,
       set_provoking_vertex_mode(cmdbuf, first_provoking_vertex);
    }
 
-   result = update_tls(cmdbuf);
-   if (result != VK_SUCCESS)
-      return result;
-
    if (!cmdbuf->vk.dynamic_graphics_state.rs.rasterizer_discard_enable) {
       ASSERTED const struct pan_fb_layout *fb =
          &cmdbuf->state.gfx.render.fb.layout;
@@ -3062,12 +3058,6 @@ prepare_draw(struct panvk_cmd_buffer *cmdbuf,
 
    struct cs_builder *b =
       panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_VERTEX_TILER);
-
-   result = prepare_blend(cmdbuf);
-   if (result != VK_SUCCESS)
-      return result;
-
-   panvk_per_arch(cmd_prepare_draw_sysvals)(cmdbuf, draw, fs);
 
    result = prepare_push_uniforms(cmdbuf, draw, hw_vs, fs);
    if (result != VK_SUCCESS)
@@ -3617,6 +3607,9 @@ panvk_cmd_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
    cmdbuf->state.gfx.fs.required =
       fs_required(&cmdbuf->state.gfx, &cmdbuf->vk.dynamic_graphics_state);
 
+   const struct panvk_shader_variant *fs =
+      panvk_shader_only_variant(get_fs(cmdbuf));
+
    /* If there's no hardware vertex shader, then nothing is going to generate
     * positions so it's all undefined and we can skip the draw.  If we don't,
     * we can end up in a situation where the IDVS faults.
@@ -3641,6 +3634,16 @@ panvk_cmd_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
    result = prepare_descs(cmdbuf, &draw);
    if (result != VK_SUCCESS)
       return;
+
+   result = update_tls(cmdbuf);
+   if (result != VK_SUCCESS)
+      return;
+
+   result = prepare_blend(cmdbuf);
+   if (result != VK_SUCCESS)
+      return;
+
+   panvk_per_arch(cmd_prepare_draw_sysvals)(cmdbuf, &draw, fs);
 
    /* For indirect draws, we need to patch the descriptors we just emitted */
    if (draw.indirect.buffer_dev_addr)
