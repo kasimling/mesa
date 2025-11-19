@@ -192,6 +192,7 @@ panvk_per_arch(get_physical_device_extensions)(
 #endif
       .EXT_private_data = true,
       .EXT_primitive_topology_list_restart = true,
+      .EXT_primitives_generated_query = PAN_ARCH >= 10,
       .EXT_provoking_vertex = true,
       .EXT_queue_family_foreign = true,
       .EXT_rgba10x6_formats = PAN_ARCH >= 11,
@@ -571,6 +572,11 @@ panvk_per_arch(get_physical_device_features)(
       /* VK_EXT_primitive_topology_list_restart */
       .primitiveTopologyListRestart = true,
       .primitiveTopologyPatchListRestart = false,
+
+      /* VK_EXT_primitives_generated_query */
+      .primitivesGeneratedQuery = PAN_ARCH >= 10,
+      .primitivesGeneratedQueryWithRasterizerDiscard = PAN_ARCH >= 10,
+      .primitivesGeneratedQueryWithNonZeroStreams = true,
 
       /* VK_EXT_provoking_vertex */
       .provokingVertexLast = true,
