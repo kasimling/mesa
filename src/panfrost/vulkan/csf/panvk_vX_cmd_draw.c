@@ -3168,8 +3168,9 @@ unroll_restart(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
       draw.indirect.stride = 0;
    }
 
+   uint32_t max_draws = draw.indirect.draw_count;
    struct pan_ptr indirect = panvk_cmd_alloc_dev_mem(
-      cmdbuf, desc, sizeof(VkDrawIndexedIndirectCommand), 4);
+      cmdbuf, desc, max_draws * sizeof(VkDrawIndexedIndirectCommand), 4);
    if (!indirect.gpu)
       return (struct panvk_draw_info) { .vertex.count = 0 };
 
@@ -3180,6 +3181,8 @@ unroll_restart(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
       .out_draw = indirect.gpu,
       .heap = dev->poly_heap.state_addr,
       .in_draw = draw.indirect.buffer_dev_addr,
+      .in_draw_stride_dw = draw.indirect.stride / 4,
+      .in_draw_count = draw.indirect.count_buffer_dev_addr,
       .index_buffer = draw.index.buffer_dev_addr,
       .index_buffer_range_el =
          draw.index.buffer_size / draw.index.index_size,
@@ -3190,7 +3193,7 @@ unroll_restart(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
    };
 
    struct panvk_precomp_ctx ctx = panvk_per_arch(precomp_cs)(cmdbuf);
-   panlib_unroll_restart_struct(&ctx, panlib_1d(1),
+   panlib_unroll_restart_struct(&ctx, panlib_1d(max_draws),
                                 PANLIB_BARRIER_CSF_WAIT, unroll,
                                 poly_compact_prim(draw.prim));
 
@@ -3199,7 +3202,9 @@ unroll_restart(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
       .index.buffer_dev_addr = dev->poly_heap_buffer->addr.dev,
       .index.buffer_size = dev->poly_heap_buffer->bo->size,
       .indirect.buffer_dev_addr = indirect.gpu,
-      .indirect.draw_count = 1,
+      .indirect.stride = sizeof(VkDrawIndexedIndirectCommand),
+      .indirect.draw_count = draw.indirect.draw_count,
+      .indirect.count_buffer_dev_addr = draw.indirect.count_buffer_dev_addr,
       .prim = u_decomposed_prim(draw.prim),
    };
 }
