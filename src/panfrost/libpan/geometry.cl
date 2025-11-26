@@ -7,10 +7,42 @@
 #include "poly/geometry.h"
 
 #if PAN_ARCH >= 10
+static bool
+panlib_get_draws(global uint32_t **out_draw,
+                 uint32_t out_draw_stride_dw,
+                 constant uint **in_draw,
+                 uint32_t in_draw_stride_dw,
+                 constant uint *in_draw_count,
+                 enum mesa_prim mode)
+{
+   uint per_prim = mesa_vertices_per_prim(mode);
+
+   *in_draw += cl_group_id.x * in_draw_stride_dw;
+   *out_draw += cl_group_id.x * out_draw_stride_dw;
+
+   bool skip_draw = in_draw_count && cl_group_id.x >= *in_draw_count;
+
+   /* If we don't have enough vertices/indices for a complete prim, skip */
+   if ((*in_draw)[0] < per_prim)
+      skip_draw = true;
+
+   if (skip_draw) {
+      if (cl_local_id.x == 0) {
+         for (uint i = 0; i < out_draw_stride_dw; i++)
+            out_draw[i] = 0;
+      }
+      return false;
+   } else {
+      return true;
+   }
+}
+
 KERNEL(16)
 panlib_unroll_restart(global uint32_t *out_draw,
                       global struct poly_heap *heap,
                       constant uint *in_draw,
+                      uint32_t in_draw_stride_dw,
+                      constant uint *in_draw_count,
                       uint64_t index_buffer,
                       uint32_t index_buffer_range_el,
                       uint32_t index_size_log2,
@@ -20,6 +52,10 @@ panlib_unroll_restart(global uint32_t *out_draw,
 {
    const uint32_t index_size_B = 1 << index_size_log2;
    const enum mesa_prim mode = poly_uncompact_prim(mode__11);
+
+   if (!panlib_get_draws(&out_draw, 5, &in_draw, in_draw_stride_dw,
+                         in_draw_count, mode))
+      return;
 
    poly_unroll_restart(out_draw, heap, in_draw, index_buffer,
                        index_buffer_range_el, index_size_B, restart_index,
