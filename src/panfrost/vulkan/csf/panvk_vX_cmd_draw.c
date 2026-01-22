@@ -839,6 +839,21 @@ prepare_poly(struct panvk_cmd_buffer *cmdbuf,
       gp->output_index_buffer = gs_index_buffer.gpu;
    }
 
+   if (cmdbuf->state.gfx.xfb.active) {
+      for (unsigned i = 0; i < MAX_XFB_BUFFERS; i++) {
+         gp->xfb_base_original[i] = cmdbuf->state.gfx.xfb.buffers[i].addr;
+         gp->xfb_size[i] = cmdbuf->state.gfx.xfb.buffers[i].size;
+         gp->xfb_offs_ptrs[i] =
+            cmdbuf->state.gfx.xfb.offsets_addr + i * sizeof(uint32_t);
+      }
+   } else {
+      for (unsigned i = 0; i < MAX_XFB_BUFFERS; i++) {
+         gp->xfb_base_original[i] = PAN_SHADER_OOB_ADDRESS;
+         gp->xfb_size[i] = 0;
+         gp->xfb_offs_ptrs[i] = PAN_SHADER_OOB_ADDRESS;
+      }
+   }
+
    struct pan_ptr gp_mem =
       panvk_cmd_upload_dev_mem(cmdbuf, desc, gp, sizeof(*gp), 8);
    if (!gp_mem.gpu)
@@ -4649,4 +4664,175 @@ panvk_per_arch(CmdEndRendering)(VkCommandBuffer commandBuffer)
    panvk_per_arch(panvk_instr_end_work_async)(
       PANVK_SUBQUEUE_FRAGMENT, cmdbuf, PANVK_INSTR_WORK_TYPE_RENDER,
       &instr_info, cs_defer(dev->csf.sb.all_iters_mask, 0));
+}
+
+VKAPI_ATTR void VKAPI_CALL
+panvk_per_arch(CmdBindTransformFeedbackBuffersEXT)(
+   VkCommandBuffer commandBuffer, uint32_t firstBinding, uint32_t bindingCount,
+   const VkBuffer *pBuffers, const VkDeviceSize *pOffsets,
+   const VkDeviceSize *pSizes)
+{
+   VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
+   struct panvk_cmd_graphics_state *state = &cmdbuf->state.gfx;
+
+   for (unsigned i = 0; i < bindingCount; i++) {
+      unsigned binding = firstBinding + i;
+      VK_FROM_HANDLE(panvk_buffer, buffer, pBuffers[i]);
+
+      state->xfb.buffers[binding].addr =
+         panvk_buffer_gpu_ptr(buffer, pOffsets[i]);
+
+      /* From the Vulkan spec 1.4.317:
+       *
+       *    "If pSizes is NULL, or the value of the pSizes array element is
+       *    VK_WHOLE_SIZE, then the maximum number of bytes captured will be
+       *    the size of the corresponding buffer minus the buffer offset."
+       */
+      VkDeviceSize size = pSizes ? pSizes[i] : VK_WHOLE_SIZE;
+      state->xfb.buffers[binding].size = panvk_buffer_range(buffer, pOffsets[i],
+                                                            size);
+   }
+
+   gfx_state_set_dirty(cmdbuf, XFB);
+}
+
+VKAPI_ATTR void VKAPI_CALL
+panvk_per_arch(CmdBeginTransformFeedbackEXT)(
+   VkCommandBuffer commandBuffer, uint32_t firstCounterBuffer,
+   uint32_t counterBufferCount, const VkBuffer *pCounterBuffers,
+   const VkDeviceSize *pCounterBufferOffsets)
+{
+   VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
+   struct panvk_cmd_graphics_state *state = &cmdbuf->state.gfx;
+   struct cs_builder *b = panvk_get_cs_builder(cmdbuf,  PANVK_SUBQUEUE_COMPUTE);
+
+   /* Allocate offsets buffer if this is the first time */
+   if (!cmdbuf->state.gfx.xfb.offsets_addr) {
+      cmdbuf->state.gfx.xfb.offsets_addr = panvk_cmd_alloc_dev_mem(
+         cmdbuf, desc, MAX_XFB_BUFFERS * sizeof(uint32_t), 4).gpu;
+      if (!cmdbuf->state.gfx.xfb.offsets_addr)
+         return;
+   }
+
+   /* Initialize offset values */
+   STATIC_ASSERT(MAX_XFB_BUFFERS == 4);
+
+   struct cs_index offsets_addr = cs_scratch_reg64(b, 0);
+   /* counter addresses are regs 2..10 */
+   struct cs_index counter_values = cs_scratch_reg_tuple(b, 10, 4);
+
+   cs_move64_to(b, offsets_addr, cmdbuf->state.gfx.xfb.offsets_addr);
+
+   if (pCounterBuffers && counterBufferCount != 0) {
+      /* Copy from the counter buffers to the offset buffer */
+
+      /* Load counter buffer addresses to registers */
+      for (unsigned counter_idx = 0; counter_idx < counterBufferCount;
+           counter_idx++) {
+         unsigned buffer_idx = counter_idx + firstCounterBuffer;
+         VK_FROM_HANDLE(panvk_buffer, buffer, pCounterBuffers[counter_idx]);
+
+         struct cs_index counter_addr = cs_scratch_reg64(b, 2 + buffer_idx * 2);
+
+         /* From the Vulkan spec 1.4.317:
+          *
+          *    "If pCounterBufferOffsets is NULL, then it is assumed the
+          *     offsets are zero."
+          */
+         uint64_t counter_offset = pCounterBufferOffsets ?
+            pCounterBufferOffsets[counter_idx] : 0;
+         cs_move64_to(b, counter_addr,
+                      panvk_buffer_gpu_ptr(buffer, counter_offset));
+      }
+
+      /* Load counter values from counter buffers */
+      for (unsigned buffer_idx = 0; buffer_idx < MAX_XFB_BUFFERS;
+           buffer_idx++) {
+         struct cs_index counter_value = cs_scratch_reg32(b, 10 + buffer_idx);
+
+         if (buffer_idx < firstCounterBuffer ||
+             buffer_idx >= firstCounterBuffer + counterBufferCount) {
+            /* No counter buffer for this XFB buffer, initialize the offset to
+             * zero */
+            cs_move32_to(b, counter_value, 0);
+         } else {
+            struct cs_index counter_addr =
+               cs_scratch_reg64(b, 2 + buffer_idx * 2);
+            cs_load32_to(b, counter_value, counter_addr, 0);
+         }
+      }
+
+   } else {
+      /* Zero all of the offsets */
+      struct cs_index counter_values_lo = cs_scratch_reg64(b, 10);
+      struct cs_index counter_values_hi = cs_scratch_reg64(b, 12);
+
+      cs_move64_to(b, counter_values_lo, 0);
+      cs_move64_to(b, counter_values_hi, 0);
+   }
+
+   /* Store to offsets */
+   cs_store(b, counter_values, offsets_addr, BITFIELD_MASK(MAX_XFB_BUFFERS), 0);
+
+   state->xfb.active = true;
+   gfx_state_set_dirty(cmdbuf, XFB);
+}
+
+VKAPI_ATTR void VKAPI_CALL
+panvk_per_arch(CmdEndTransformFeedbackEXT)(
+   VkCommandBuffer commandBuffer, uint32_t firstCounterBuffer,
+   uint32_t counterBufferCount, const VkBuffer *pCounterBuffers,
+   const VkDeviceSize *pCounterBufferOffsets)
+{
+   VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
+   struct panvk_cmd_graphics_state *state = &cmdbuf->state.gfx;
+   struct cs_builder *b = panvk_get_cs_builder(cmdbuf,  PANVK_SUBQUEUE_COMPUTE);
+
+   /* Offsets buffer should have been allocated by BeginTransformFeedback */
+   assert(cmdbuf->state.gfx.xfb.offsets_addr);
+
+   if (pCounterBuffers && counterBufferCount != 0) {
+      /* Copy from offset buffer to counter buffers */
+      STATIC_ASSERT(MAX_XFB_BUFFERS == 4);
+
+      struct cs_index offsets_addr = cs_scratch_reg64(b, 0);
+      /* counter addresses are regs 2..10 */
+      struct cs_index counter_values = cs_scratch_reg_tuple(b, 10, 4);
+
+      /* Read offset values */
+      cs_move64_to(b, offsets_addr, cmdbuf->state.gfx.xfb.offsets_addr);
+      cs_load_to(b, counter_values, offsets_addr,
+                 BITFIELD_MASK(MAX_XFB_BUFFERS), 0);
+
+      /* Load counter buffer addresses to registers */
+      for (unsigned counter_idx = 0; counter_idx < counterBufferCount;
+           counter_idx++) {
+         unsigned buffer_idx = counter_idx + firstCounterBuffer;
+         VK_FROM_HANDLE(panvk_buffer, buffer, pCounterBuffers[counter_idx]);
+
+         struct cs_index counter_addr = cs_scratch_reg64(b, 2 + buffer_idx * 2);
+
+         /* From the Vulkan spec 1.4.317:
+          *
+          *    "If pCounterBufferOffsets is NULL, then it is assumed the
+          *     offsets are zero."
+          */
+         uint64_t counter_offset = pCounterBufferOffsets ?
+            pCounterBufferOffsets[counter_idx] : 0;
+         cs_move64_to(b, counter_addr,
+                      panvk_buffer_gpu_ptr(buffer, counter_offset));
+      }
+
+      /* Store offsets to counter buffers */
+      for (unsigned counter_idx = 0; counter_idx < counterBufferCount;
+           counter_idx++) {
+         unsigned buffer_idx = counter_idx + firstCounterBuffer;
+         struct cs_index counter_addr = cs_scratch_reg64(b, 2 + buffer_idx * 2);
+         struct cs_index counter_value = cs_scratch_reg32(b, 10 + buffer_idx);
+         cs_store32(b, counter_value, counter_addr, 0);
+      }
+   }
+
+   state->xfb.active = false;
+   gfx_state_set_dirty(cmdbuf, XFB);
 }

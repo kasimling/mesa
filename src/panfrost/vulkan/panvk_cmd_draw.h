@@ -132,6 +132,8 @@ enum panvk_cmd_graphics_dirty_state {
    PANVK_CMD_GRAPHICS_DIRTY_GS,
    PANVK_CMD_GRAPHICS_DIRTY_FS,
    PANVK_CMD_GRAPHICS_DIRTY_VB,
+   /* TODO: is this used? */
+   PANVK_CMD_GRAPHICS_DIRTY_XFB,
    PANVK_CMD_GRAPHICS_DIRTY_OQ,
    PANVK_CMD_GRAPHICS_DIRTY_DESC_STATE,
    PANVK_CMD_GRAPHICS_DIRTY_RENDER_STATE,
@@ -242,6 +244,24 @@ struct panvk_cmd_graphics_state {
       uint64_t size;
       uint8_t index_size;
    } ib;
+
+#if PAN_ARCH >= 10
+   /* Transform feedback */
+   struct {
+      bool active;
+      struct {
+         uint64_t addr;
+         /* 32-bit because maxTransformFeedbackBufferSize < 2^32, and counters
+          * are 32-bit */
+         uint32_t size;
+      } buffers[MAX_XFB_BUFFERS];
+
+      /* Array of dynamic offsets into each buffer, in gpu memory.
+       * Counter buffers are read into the offset buffer when xfb begins, and
+       * the values are written back to counter buffers when xfb ends. */
+      uint64_t offsets_addr;
+   } xfb;
+#endif
 
    struct {
       struct panvk_blend_info info;
