@@ -213,6 +213,7 @@ panvk_per_arch(get_physical_device_extensions)(
       .EXT_astc_decode_mode = PAN_ARCH >= 9,
       .EXT_texture_compression_astc_hdr = true,
       .EXT_tooling_info = true,
+      .EXT_transform_feedback = instance->enable_gs_xfb,
       .EXT_vertex_attribute_divisor = true,
       .EXT_vertex_input_dynamic_state = true,
       .EXT_ycbcr_2plane_444_formats = PAN_ARCH >= 10,
@@ -635,6 +636,10 @@ panvk_per_arch(get_physical_device_features)(
 
       /* VK_EXT_texel_buffer_alignment */
       .texelBufferAlignment = true,
+
+      /* VK_EXT_transform_feedback */
+      .transformFeedback = instance->enable_gs_xfb,
+      .geometryStreams = false, /* TODO */
 
       /* VK_EXT_rgba10x6_formats */
       .formatRgba10x6WithoutYCbCrSampler = PAN_ARCH >= 11,
@@ -1235,6 +1240,7 @@ panvk_per_arch(get_physical_device_properties)(
       /* VK_ARM_scheduling_controls */
       .schedulingControlsFlags =
          VK_PHYSICAL_DEVICE_SCHEDULING_CONTROLS_SHADER_CORE_COUNT_ARM,
+
    };
 
    snprintf(properties->deviceName, sizeof(properties->deviceName), "%s",
@@ -1267,6 +1273,18 @@ panvk_per_arch(get_physical_device_properties)(
       properties->maxGeometryOutputComponents = 128;
       properties->maxGeometryOutputVertices = 1024;
       properties->maxGeometryTotalOutputComponents = 1024;
+
+      /* VK_EXT_transform_feedback */
+      properties->maxTransformFeedbackStreams = 1;
+      properties->maxTransformFeedbackBuffers = MAX_XFB_BUFFERS;
+      properties->maxTransformFeedbackBufferSize = panvk_get_max_buffer_size(device);
+      properties->maxTransformFeedbackStreamDataSize = 2048;
+      properties->maxTransformFeedbackBufferDataSize = 512;
+      properties->maxTransformFeedbackBufferDataStride = 2048;
+      properties->transformFeedbackQueries = false;
+      properties->transformFeedbackStreamsLinesTriangles = true;
+      properties->transformFeedbackRasterizationStreamSelect = false; /* TODO depends on streams */
+      properties->transformFeedbackDraw = false;
    }
 
    /* VK_EXT_physical_device_drm */
