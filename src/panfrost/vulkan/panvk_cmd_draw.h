@@ -534,6 +534,12 @@ struct panvk_draw_info {
       uint64_t count_buffer_dev_addr;
       uint32_t draw_count;
       uint32_t stride;
+
+      /* If nonzero, this is a CmdDrawIndirectByteCountEXT draw, and
+       * buffer_dev_addr is an XFB counter buffer rather than a normal
+       * indirect draw buffer.  */
+      uint32_t vertex_stride;
+      uint32_t counter_offset;
    } indirect;
 
    enum mesa_prim prim;

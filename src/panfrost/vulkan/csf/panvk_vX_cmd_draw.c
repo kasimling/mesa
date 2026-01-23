@@ -206,6 +206,23 @@ panvk_per_arch(device_draw_context_cleanup)(struct panvk_device *dev)
 }
 #endif /* PAN_ARCH < 14 */
 
+static bool
+draw_is_byte_count_indirect(const struct panvk_draw_info *draw)
+{
+   return draw->indirect.vertex_stride != 0;
+}
+
+/* Returns whether base instance or first vertex are indirect.
+ *
+ * For normal indirect draws, base instance/first vertex are part of the
+ * indirect buffer, which requires special handling. For DrawIndirectByteCount,
+ * the only indirect draw parameter is the vertex count. */
+static bool
+draw_base_is_indirect(const struct panvk_draw_info *draw)
+{
+   return draw->indirect.buffer_dev_addr && !draw_is_byte_count_indirect(draw);
+}
+
 static void
 prepare_vi(struct panvk_cmd_buffer *cmdbuf)
 {
@@ -390,7 +407,7 @@ prepare_vs_desc(struct panvk_cmd_buffer *cmdbuf,
       return VK_SUCCESS;
 
    cmdbuf->state.gfx.vs.desc_repeat_count = 0;
-   if (draw->indirect.buffer_dev_addr) {
+   if (draw_base_is_indirect(draw)) {
       /* BASE_INSTANCE is always dirty for indirect draws so it's safe to look
        * at the draw info here.
        */
@@ -2350,7 +2367,7 @@ prepare_push_uniforms(struct panvk_cmd_buffer *cmdbuf,
 
    uint32_t vs_repeat_count = 1;
    if (hw_vs_push_uniforms_dirty(cmdbuf)) {
-      if (draw->indirect.buffer_dev_addr) {
+      if ( draw_base_is_indirect(draw)) {
          /* For indirect draws, VS_PUSH_UNIFORMS are always dirty so it's safe to
           * look at the draw info here.
           */
@@ -3202,6 +3219,9 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
    assert(!is_multiview); /* TODO: multiview */
    assert(!is_multidraw); /* TODO: multidraw */
 
+   /* TODO: hook up DrawIndirectByteCount in libpoly */
+   assert(!draw_is_byte_count_indirect(&draw));
+
    /* libpoly CS dispatches are sequential, so we use PANVK_CSF_BARRIER_WAIT for
     * every dispatch except the last */
    unsigned dispatches_left = 0;
@@ -3577,14 +3597,18 @@ launch_indirect_draw(struct panvk_cmd_buffer *cmdbuf,
    uint32_t vs_res_table_size =
       panvk_shader_res_table_count(&cmdbuf->state.gfx.vs.desc) *
       pan_size(RESOURCE);
-   bool patch_faus = shader_uses_sysval(vs, graphics, vs.first_vertex) ||
-                     shader_uses_sysval(vs, graphics, vs.base_instance);
+   bool patch_faus = draw_base_is_indirect(draw) &&
+                     (shader_uses_sysval(vs, graphics, vs.first_vertex) ||
+                      shader_uses_sysval(vs, graphics, vs.base_instance));
    struct cs_index draw_params_addr = cs_scratch_reg64(b, 0);
    struct cs_index draw_count = cs_scratch_reg32(b, 6);
    struct cs_index max_draw_count = cs_scratch_reg32(b, 7);
    struct cs_index draw_id = cs_scratch_reg32(b, 7);
    struct cs_index vs_fau_addr = cs_scratch_reg64(b, 8);
    struct cs_index tracing_scratch_regs = cs_scratch_reg_tuple(b, 10, 4);
+#if PAN_ARCH >= 13
+   struct cs_index div_scratch_regs = cs_scratch_reg_tuple(b, 10, 4);
+#endif
    uint32_t vs_fau_count = vs->fau.total_count;
 
    if (draw->indirect.count_buffer_dev_addr) {
@@ -3607,10 +3631,36 @@ launch_indirect_draw(struct panvk_cmd_buffer *cmdbuf,
    {
       cs_update_vt_ctx(b) {
          cs_move32_to(b, cs_sr_reg32(b, IDVS, GLOBAL_ATTRIBUTE_OFFSET), 0);
-         /* Load SR33-37 from indirect buffer. */
-         unsigned reg_mask = draw->index.index_size ? 0b11111 : 0b11011;
-         cs_load_to(b, cs_sr_reg_tuple(b, IDVS, INDEX_COUNT, 5),
-                    draw_params_addr, reg_mask, 0);
+
+         if (draw_is_byte_count_indirect(draw)) {
+            cs_move32_to(b, cs_sr_reg32(b, IDVS, INSTANCE_COUNT),
+                         draw->instance.count);
+            cs_move32_to(b, cs_sr_reg32(b, IDVS, INDEX_OFFSET), 0);
+            cs_move32_to(b, cs_sr_reg32(b, IDVS, VERTEX_OFFSET), 0);
+
+#if PAN_ARCH >= 13
+            struct cs_index index_count = cs_sr_reg32(b, IDVS, INDEX_COUNT);
+
+            cs_load32_to(b, index_count, draw_params_addr, 0);
+            if (draw->indirect.counter_offset != 0) {
+               cs_add_imm32(b, index_count, index_count,
+                            -(int32_t) draw->indirect.counter_offset);
+
+               cs_if(b, MALI_CS_CONDITION_LESS, index_count)
+                  cs_move32_to(b, index_count, 0);
+            }
+
+            cs_udiv32(b, index_count, index_count,
+                      draw->indirect.vertex_stride, div_scratch_regs);
+#else
+            UNREACHABLE("TODO: DrawIndirectByteCount on <v13");
+#endif
+         } else {
+            /* Load SR33-37 from indirect buffer. */
+            unsigned reg_mask = draw->index.index_size ? 0b11111 : 0b11011;
+            cs_load_to(b, cs_sr_reg_tuple(b, IDVS, INDEX_COUNT, 5),
+                       draw_params_addr, reg_mask, 0);
+         }
       }
 
       if (patch_faus) {
@@ -3713,7 +3763,7 @@ panvk_cmd_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
     * we're going to patch the descriptors and copy from the indirect buffer
     * into the uniform block.
     */
-   if (draw.indirect.buffer_dev_addr) {
+   if (draw_base_is_indirect(&draw)) {
       gfx_state_set_dirty(cmdbuf, BASE_INSTANCE);
       gfx_state_set_dirty(cmdbuf, VS_PUSH_UNIFORMS);
    }
@@ -3737,7 +3787,7 @@ panvk_cmd_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
    panvk_per_arch(cmd_prepare_draw_sysvals)(cmdbuf, &draw);
 
    /* For indirect draws, we need to patch the descriptors we just emitted */
-   if (draw.indirect.buffer_dev_addr)
+   if (draw_base_is_indirect(&draw))
       patch_vs_attribs(cmdbuf, &draw);
 
    if (gs) {
@@ -3881,6 +3931,32 @@ panvk_per_arch(CmdDrawIndexedIndirect)(VkCommandBuffer commandBuffer,
       .indirect.buffer_dev_addr = panvk_buffer_gpu_ptr(buffer, offset),
       .indirect.draw_count = drawCount,
       .indirect.stride = stride,
+      .prim = panvk_get_client_prim(cmdbuf),
+   };
+
+   panvk_cmd_draw(cmdbuf, draw);
+}
+
+VKAPI_ATTR void VKAPI_CALL
+panvk_per_arch(CmdDrawIndirectByteCountEXT)(VkCommandBuffer commandBuffer,
+                                            uint32_t instanceCount,
+                                            uint32_t firstInstance,
+                                            VkBuffer counterBuffer,
+                                            VkDeviceSize counterBufferOffset,
+                                            uint32_t counterOffset,
+                                            uint32_t vertexStride)
+{
+   VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
+   VK_FROM_HANDLE(panvk_buffer, counter_buffer, counterBuffer);
+
+   struct panvk_draw_info draw = {
+      .indirect.buffer_dev_addr =
+         panvk_buffer_gpu_ptr(counter_buffer, counterBufferOffset),
+      .indirect.counter_offset = counterOffset,
+      .indirect.draw_count = 1,
+      .indirect.vertex_stride = vertexStride,
+      .instance.base = firstInstance,
+      .instance.count = instanceCount,
       .prim = panvk_get_client_prim(cmdbuf),
    };
 
