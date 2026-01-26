@@ -44,4 +44,13 @@ panlib_gs_setup_indirect(global struct poly_vertex_params *vp /* output */,
                           index_size_B, index_buffer_range_el, prim,
                           is_prefix_summing, max_indices, shape);
 }
+
+KERNEL(256)
+panlib_prefix_sum_geom(global struct poly_geometry_params *gp)
+{
+   POLY_DECL_PREFIX_SUM_SCRATCH(scratch, 16, 256);
+   poly_prefix_sum(scratch, gp->count_buffer, gp->input_primitives,
+                   gp->count_buffer_stride / 4, cl_group_id.x, 256);
+}
+
 #endif
