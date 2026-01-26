@@ -121,7 +121,7 @@ libagx_gs_setup_indirect(
 KERNEL(1024)
 libagx_prefix_sum_geom(constant struct poly_geometry_params *p)
 {
-   local uint scratch[32];
+   POLY_DECL_PREFIX_SUM_SCRATCH(scratch, 32, 1024);
    poly_prefix_sum(scratch, p->count_buffer, p->input_primitives,
                    p->count_buffer_stride / 4, cl_group_id.x, 1024);
 }
