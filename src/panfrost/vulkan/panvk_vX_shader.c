@@ -186,6 +186,10 @@ panvk_lower_sysvals(nir_builder *b, nir_instr *instr, void *data)
    case nir_intrinsic_load_ro_sink_address_poly:
       val = nir_imm_int64(b, PAN_SHADER_OOB_ADDRESS);
       break;
+   case nir_intrinsic_ro_to_rw_poly:
+      /* OOB addresses are already writable, so this is a no-op */
+      val = intr->src[0].ssa;
+      break;
 
    case nir_intrinsic_load_vertex_param_buffer_poly:
       val = load_sysval(b, graphics, bit_size, poly.vertex_params);

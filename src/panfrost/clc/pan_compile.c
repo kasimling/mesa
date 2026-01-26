@@ -201,6 +201,11 @@ lower_sysvals(nir_builder *b, nir_intrinsic_instr *intr, UNUSED void *_data)
       val = nir_imm_int64(b, PAN_SHADER_OOB_ADDRESS);
       break;
 
+   case nir_intrinsic_ro_to_rw_poly:
+      /* OOB addresses are already writable, so this is a no-op */
+      val = intr->src[0].ssa;
+      break;
+
    case nir_intrinsic_load_printf_buffer_address:
       val = load_sysval_from_push_const(
          b,
