@@ -839,6 +839,18 @@ prepare_poly(struct panvk_cmd_buffer *cmdbuf,
       gp->output_index_buffer = gs_index_buffer.gpu;
    }
 
+   /* TODO: queries */
+   for (unsigned i = 0; i < ARRAY_SIZE(gp->prims_generated_counter); i++) {
+      gp->prims_generated_counter[i] = PAN_SHADER_OOB_ADDRESS;
+      gp->xfb_prims_generated_counter[i] = PAN_SHADER_OOB_ADDRESS;
+   }
+
+   /* these queries are only used for gallium */
+   gp->xfb_any_overflow = PAN_SHADER_OOB_ADDRESS;
+   for (unsigned i = 0; i < MAX_XFB_BUFFERS; i++) {
+      gp->xfb_overflow[i] = PAN_SHADER_OOB_ADDRESS;
+   }
+
    if (cmdbuf->state.gfx.xfb.active) {
       for (unsigned i = 0; i < MAX_XFB_BUFFERS; i++) {
          gp->xfb_base_original[i] = cmdbuf->state.gfx.xfb.buffers[i].addr;
@@ -852,6 +864,26 @@ prepare_poly(struct panvk_cmd_buffer *cmdbuf,
          gp->xfb_size[i] = 0;
          gp->xfb_offs_ptrs[i] = PAN_SHADER_OOB_ADDRESS;
       }
+   }
+
+   if (gsi->count_words) {
+      gp->count_buffer_stride = gsi->count_words * sizeof(uint32_t);
+
+      size_t count_buffer_size = 0;
+
+      if (!gsi->prefix_sum)
+         count_buffer_size = gp->count_buffer_stride;
+      else if (!indirect_draw)
+         count_buffer_size = gp->input_primitives * gp->count_buffer_stride;
+      /* For prefix summing indirect draws, the buffer is dynamically
+       * allocated */
+
+      /* TODO: hk zeros this at record time, but afaict the value will always
+       * be overwritten by the count shader regardless. If it *doesn't* get
+       * overwritten by the count shader then hk probably has a bug with
+       * command buffer resubmission there. */
+      gp->count_buffer = panvk_cmd_alloc_dev_mem(cmdbuf, desc,
+                                                 count_buffer_size, 4).gpu;
    }
 
    struct pan_ptr gp_mem =
@@ -3023,6 +3055,7 @@ static struct panvk_draw_info
 launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
 {
    struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
+   struct panvk_precomp_ctx ctx = panvk_per_arch(precomp_cs)(cmdbuf);
    const struct panvk_shader_variant *vs =
       panvk_sw_vs_variant(cmdbuf->state.gfx.vs.shader);
    const struct panvk_shader *gs = cmdbuf->state.gfx.gs.shader;
@@ -3052,6 +3085,12 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
       dispatches_left++;
    if (vs->bin_size)
       dispatches_left++;
+   if (gsi->count_words)
+      dispatches_left++;
+   if (gsi->count_words && gsi->prefix_sum)
+      dispatches_left++;
+   if (pre && cmdbuf->state.gfx.xfb.active)
+      dispatches_left++;
    if (main->bin_size)
       dispatches_left++;
 
@@ -3079,7 +3118,6 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
 
       enum panlib_barrier barrier = dispatches_left > 0 ?
          PANLIB_BARRIER_CSF_WAIT : PANLIB_BARRIER_CSF_SYNC;
-      struct panvk_precomp_ctx ctx = panvk_per_arch(precomp_cs)(cmdbuf);
       panlib_gs_setup_indirect_struct(&ctx, panlib_1d(1), barrier, setup);
    }
 
@@ -3109,30 +3147,57 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
       launch_gfx_cs(cmdbuf, vs, &cmdbuf->state.gfx.vs.desc, 0, &vs_disp);
    }
 
-   (void)count; (void)pre;
+   struct panvk_dispatch_info gs_disp;
+   if (is_indirect) {
+      gs_disp = (struct panvk_dispatch_info) {
+         .indirect.buffer_dev_addr = cmdbuf->state.gfx.poly.gp_addr +
+            offsetof(struct poly_geometry_params, grid),
+      };
+   } else {
+      assert(gp->grid[2] == 1);
+      gs_disp = (struct panvk_dispatch_info) {
+         .direct.wg_count = {
+            .x = gp->grid[0],
+            .y = gp->grid[1],
+            .z = gp->grid[2],
+         },
+      };
+   };
+
+   if (gsi->count_words) {
+      dispatches_left--;
+      gs_disp.barrier = dispatches_left > 0 ? PANVK_CSF_BARRIER_WAIT
+                                            : PANVK_CSF_BARRIER_SYNC;
+      launch_gfx_cs(cmdbuf, count, &cmdbuf->state.gfx.gs.desc, 0, &gs_disp);
+   }
+
+   /* TODO: is the prefix_sum part of this condition redundant? */
+   if (gsi->count_words && gsi->prefix_sum) {
+      dispatches_left--;
+      enum panlib_barrier barrier = dispatches_left > 0 ?
+         PANLIB_BARRIER_CSF_WAIT : PANLIB_BARRIER_CSF_SYNC;
+      panlib_prefix_sum_geom(&ctx, panlib_1d(gsi->count_words),
+                             barrier, cmdbuf->state.gfx.poly.gp_addr);
+   }
+
+   if (pre && cmdbuf->state.gfx.xfb.active) {
+      dispatches_left--;
+      struct panvk_dispatch_info single_disp = {
+         .direct.wg_count = {
+            .x = 1,
+            .y = 1,
+            .z = 1,
+         },
+         .barrier = dispatches_left > 0 ? PANVK_CSF_BARRIER_WAIT
+                                        : PANVK_CSF_BARRIER_SYNC,
+      };
+      launch_gfx_cs(cmdbuf, pre, &cmdbuf->state.gfx.gs.desc, 0, &single_disp);
+   }
 
    if (main->bin_size) {
       dispatches_left--;
-      struct panvk_dispatch_info gs_disp;
-      if (is_indirect) {
-         gs_disp = (struct panvk_dispatch_info) {
-            .indirect.buffer_dev_addr = cmdbuf->state.gfx.poly.gp_addr +
-               offsetof(struct poly_geometry_params, grid),
-            .barrier = dispatches_left > 0 ? PANVK_CSF_BARRIER_WAIT
-                                           : PANVK_CSF_BARRIER_SYNC,
-         };
-      } else {
-         assert(gp->grid[2] == 1);
-         gs_disp = (struct panvk_dispatch_info) {
-            .direct.wg_count = {
-               .x = gp->grid[0],
-               .y = gp->grid[1],
-               .z = gp->grid[2],
-            },
-            .barrier = dispatches_left > 0 ? PANVK_CSF_BARRIER_WAIT
-                                           : PANVK_CSF_BARRIER_SYNC,
-         };
-      };
+      gs_disp.barrier = dispatches_left > 0 ? PANVK_CSF_BARRIER_WAIT
+                                            : PANVK_CSF_BARRIER_SYNC;
       launch_gfx_cs(cmdbuf, main, &cmdbuf->state.gfx.gs.desc, 0, &gs_disp);
    }
 
