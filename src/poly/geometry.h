@@ -500,6 +500,14 @@ poly_decomposed_prims_for_vertices_with_tess(enum mesa_prim prim, int vertices,
 }
 
 #ifdef __OPENCL_VERSION__
+
+/* TODO: apply a similar change to ed0998ca98a
+ * ("poly: Generalize unroll_restart() to arbitrary workgroup/subgroup sizes")
+ * to poly_prefix_sum */
+#define POLY_DECL_PREFIX_SUM_SCRATCH(__scratch, __sg_size, __wg_size) \
+   STATIC_ASSERT(__wg_size == __sg_size * __sg_size); \
+   local uint __scratch[__wg_size]
+
 /*
  * Returns (work_group_scan_inclusive_add(x), work_group_sum(x)). Implemented
  * manually with subgroup ops and local memory since Mesa doesn't do those
@@ -508,13 +516,14 @@ poly_decomposed_prims_for_vertices_with_tess(enum mesa_prim prim, int vertices,
 static inline uint2
 poly_work_group_scan_inclusive_add(uint x, local uint *scratch)
 {
+   const uint sg_size = get_sub_group_size();
    uint sg_id = get_sub_group_id();
 
    /* Partial prefix sum of the subgroup */
    uint sg = sub_group_scan_inclusive_add(x);
 
    /* Reduction (sum) for the subgroup */
-   uint sg_sum = sub_group_broadcast(sg, 31);
+   uint sg_sum = sub_group_broadcast(sg, sg_size - 1);
 
    /* Write out all the subgroups sums */
    barrier(CLK_LOCAL_MEM_FENCE);
@@ -534,7 +543,7 @@ poly_work_group_scan_inclusive_add(uint x, local uint *scratch)
    uint prefix = base + sg;
 
    /* Reduce the workgroup using the prefix sum we already did */
-   uint reduction = sub_group_broadcast(other_sums + other_sum, 31);
+   uint reduction = sub_group_broadcast(other_sums + other_sum, sg_size - 1);
 
    return (uint2)(prefix, reduction);
 }
