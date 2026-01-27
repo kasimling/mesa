@@ -30,6 +30,7 @@
 #include "panvk_image_view.h"
 #include "panvk_instance.h"
 #include "panvk_instr.h"
+#include "panvk_meta.h"
 #include "panvk_priv_bo.h"
 #include "panvk_query_pool.h"
 #include "panvk_shader.h"
@@ -892,6 +893,129 @@ prepare_poly(struct panvk_cmd_buffer *cmdbuf,
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
    cmdbuf->state.gfx.poly.gp_addr = gp_mem.gpu;
+
+   return VK_SUCCESS;
+}
+
+struct panvk_passthrough_gs_key {
+   enum panvk_meta_object_key_type type;
+   /* TODO: noperspective varyings handling? */
+   struct poly_passthrough_gs_key inner;
+};
+
+static VkResult
+get_passthrough_gs(struct panvk_cmd_buffer *cmdbuf,
+                   const struct panvk_draw_info *draw,
+                   struct panvk_shader **shader_out)
+{
+   struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
+   const struct panvk_shader *vs = cmdbuf->state.gfx.vs.shader;
+   const struct panvk_shader_variant *vs_variant = panvk_sw_vs_variant(vs);
+
+   uint32_t xfb_outputs = vs->vs.xfb_info ? vs->vs.xfb_info->output_count : 0;
+
+   struct panvk_passthrough_gs_key *key;
+   size_t key_size = sizeof(*key) - sizeof(key->inner) +
+                     poly_passthrough_gs_key_size(xfb_outputs);
+   key = alloca(key_size);
+
+   *key = (struct panvk_passthrough_gs_key) {
+      .type = PANVK_META_OBJECT_KEY_PASSTHROUGH_GS,
+      .inner = {
+         .prim = u_decomposed_prim(draw->prim),
+         .outputs = vs_variant->info.outputs_written,
+      },
+   };
+
+   for (uint32_t i = 0; i < vs_variant->info.varyings.formats.count; i++) {
+      const struct pan_varying_slot *slot =
+         &vs_variant->info.varyings.formats.slots[i];
+      if (pan_varying_slot_is_empty(slot))
+         continue;
+
+      key->inner.output_types[slot->location] = slot->alu_type;
+      key->inner.output_components[slot->location] = slot->ncomps;
+   }
+
+   if (xfb_outputs != 0) {
+      memcpy(&key->inner.xfb_stride, &vs->vs.xfb_stride,
+             sizeof(vs->vs.xfb_stride));
+      memcpy(&key->inner.xfb_info, vs->vs.xfb_info,
+             nir_xfb_info_size(xfb_outputs));
+   }
+
+   VkShaderEXT shader_handle = (VkShaderEXT) vk_meta_lookup_object(
+      &dev->meta, VK_OBJECT_TYPE_SHADER_EXT, key, key_size);
+
+   if (shader_handle != VK_NULL_HANDLE) {
+      struct vk_shader *vk_shader = vk_shader_from_handle(shader_handle);
+      *shader_out = container_of(vk_shader, struct panvk_shader, vk);
+
+      return VK_SUCCESS;
+   }
+
+   /* TODO: consider putting the key info in the shader name? The xfb_info
+    * part would be large and awkward though */
+   nir_builder b = nir_builder_init_simple_shader(
+      MESA_SHADER_GEOMETRY,
+      pan_get_nir_shader_compiler_options(PAN_ARCH, false),
+      "panvk_passthrough_gs");
+
+   poly_nir_passthrough_gs(&b, &key->inner);
+
+   struct panvk_shader *shader;
+   VkResult result = panvk_per_arch(create_shader)(dev, b.shader, &shader);
+   if (result != VK_SUCCESS)
+      return result;
+
+   shader->gs.is_passthrough = true;
+
+   shader_handle = (VkShaderEXT) vk_meta_cache_object(
+      &dev->vk, &dev->meta, key, key_size, VK_OBJECT_TYPE_SHADER_EXT,
+      (uint64_t) vk_shader_to_handle(&shader->vk));
+
+   struct vk_shader *vk_shader = vk_shader_from_handle(shader_handle);
+   *shader_out = container_of(vk_shader, struct panvk_shader, vk);
+
+   return VK_SUCCESS;
+}
+
+/* XFB is only implemented for GS, so if the application uses a VS with XFB
+ * but does not use a GS, we need to insert a passthrough GS. */
+static VkResult
+prepare_passthrough_gs(struct panvk_cmd_buffer *cmdbuf,
+                       const struct panvk_draw_info *draw)
+{
+   const struct panvk_shader *vs = cmdbuf->state.gfx.vs.shader;
+   const struct panvk_shader *gs = cmdbuf->state.gfx.gs.shader;
+
+   if (!gfx_state_dirty(cmdbuf, VS) && !gfx_state_dirty(cmdbuf, GS))
+      return VK_SUCCESS;
+
+   uint32_t xfb_outputs = vs->vs.xfb_info ? vs->vs.xfb_info->output_count : 0;
+   /* TODO: we could take into account which xfb buffers are actually bound
+    * and whether xfb is active */
+   bool needs_gs = xfb_outputs != 0;
+
+   /* If we have a passthrough GS bound that we don't need anymore, unbind it */
+   if (!needs_gs && gs && gs->gs.is_passthrough) {
+      cmdbuf->state.gfx.gs.shader = NULL;
+      gfx_state_set_dirty(cmdbuf, GS);
+   }
+
+   /* If we need a GS and don't have one, bind a passthrough GS */
+   if (needs_gs && !gs) {
+      struct panvk_shader *passthrough_gs;
+      VkResult result = get_passthrough_gs(cmdbuf, draw, &passthrough_gs);
+      if (result != VK_SUCCESS)
+         return result;
+
+      if (passthrough_gs != cmdbuf->state.gfx.gs.shader) {
+         cmdbuf->state.gfx.gs.shader = passthrough_gs;
+         gfx_state_set_dirty(cmdbuf, GS);
+         gfx_state_set_dirty(cmdbuf, GS_PUSH_UNIFORMS);
+      }
+   }
 
    return VK_SUCCESS;
 }
@@ -3557,6 +3681,10 @@ panvk_cmd_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
     */
    cmdbuf->state.gfx.fs.required =
       fs_required(&cmdbuf->state.gfx, &cmdbuf->vk.dynamic_graphics_state);
+
+   result = prepare_passthrough_gs(cmdbuf, &draw);
+   if (result != VK_SUCCESS)
+      return;
 
    /* If there's no hardware vertex shader, then nothing is going to generate
     * positions so it's all undefined and we can skip the draw.  If we don't,
