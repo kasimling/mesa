@@ -502,6 +502,7 @@ struct panvk_shader {
       } vs;
 
       struct {
+         bool is_passthrough;
          struct poly_gs_info gs_info;
       } gs;
    };
