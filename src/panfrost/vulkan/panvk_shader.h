@@ -482,7 +482,17 @@ struct panvk_shader {
    struct vk_shader vk;
 
    struct panvk_shader_desc_info desc_info;
-   struct poly_gs_info gs_info;
+
+   union {
+      struct {
+         uint8_t xfb_stride[MAX_XFB_BUFFERS];
+         nir_xfb_info *xfb_info;
+      } vs;
+
+      struct {
+         struct poly_gs_info gs_info;
+      } gs;
+   };
 
    struct panvk_shader_variant variants[];
 };

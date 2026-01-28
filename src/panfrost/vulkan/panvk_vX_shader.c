@@ -1414,6 +1414,34 @@ panvk_nir_lower_compute_vs(nir_shader *nir)
 }
 
 static VkResult
+panvk_alloc_shader(struct panvk_device *dev, mesa_shader_stage stage,
+                   uint16_t xfb_output_count,
+                   const VkAllocationCallbacks *alloc,
+                   struct panvk_shader **shader)
+{
+   VK_MULTIALLOC(ma);
+
+   size_t shader_size = sizeof(struct panvk_shader) +
+      sizeof(struct panvk_shader_variant) * panvk_shader_num_variants(stage);
+   vk_multialloc_add_size(&ma, shader, struct panvk_shader, shader_size);
+
+   size_t xfb_info_size =
+      stage == MESA_SHADER_VERTEX && xfb_output_count != 0 ?
+      nir_xfb_info_size(xfb_output_count) : 0;
+   VK_MULTIALLOC_DECL_SIZE(&ma, nir_xfb_info, xfb_info, xfb_info_size);
+
+   /* TODO: vk_shader_multizalloc doesn't seem to have the same scope logic as
+    * vk_shader_zalloc. Why? Is this a problem? */
+   if (!vk_shader_multizalloc(&dev->vk, &ma, &panvk_shader_ops, stage, alloc))
+      return panvk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+
+   if (stage == MESA_SHADER_VERTEX && xfb_output_count != 0)
+      (*shader)->vs.xfb_info = xfb_info;
+
+   return VK_SUCCESS;
+}
+
+static VkResult
 panvk_compile_shader(struct panvk_device *dev,
                      struct vk_shader_compile_info *info,
                      const struct vk_graphics_pipeline_state *state,
@@ -1425,16 +1453,14 @@ panvk_compile_shader(struct panvk_device *dev,
    struct panvk_physical_device *phys_dev =
       to_panvk_physical_device(dev->vk.physical);
 
-   struct panvk_shader *shader;
-   VkResult result;
+   uint16_t xfb_output_count = info->nir->xfb_info ?
+      info->nir->xfb_info->output_count : 0;
 
-   size_t size =
-      sizeof(struct panvk_shader) + sizeof(struct panvk_shader_variant) *
-                                       panvk_shader_num_variants(info->stage);
-   shader = vk_shader_zalloc(&dev->vk, &panvk_shader_ops, info->stage,
-                             pAllocator, size);
-   if (shader == NULL)
-      return panvk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+   struct panvk_shader *shader;
+   VkResult result =  panvk_alloc_shader(dev, info->stage, xfb_output_count,
+                                         pAllocator, &shader);
+   if (result != VK_SUCCESS)
+      return result;
 
    nir_variable_mode robust_modes = 0;
    if (info->robustness->uniform_buffers != VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED_EXT)
@@ -1454,12 +1480,20 @@ panvk_compile_shader(struct panvk_device *dev,
    case MESA_SHADER_VERTEX: {
       VkShaderStageFlags next_stage_mask = info->next_stage_mask;
 
-      /* Transform feedback is layered on top of geometry shaders. If there
-       * is not a geometry shader in the pipeline, we will compile a geometry
-       * shader for the purpose. Update the next_stage mask accordingly.
-       */
-      if (info->nir->xfb_info != NULL)
+      if (info->nir->xfb_info != NULL) {
+         memcpy(shader->vs.xfb_stride, info->nir->info.xfb_stride,
+                sizeof(info->nir->info.xfb_stride));
+
+         size_t xfb_info_size = xfb_output_count != 0 ?
+            nir_xfb_info_size(xfb_output_count) : 0;
+         memcpy(shader->vs.xfb_info, info->nir->xfb_info, xfb_info_size);
+
+         /* Transform feedback is layered on top of geometry shaders. If there
+          * is not a geometry shader in the pipeline, we will compile a geometry
+          * shader for the purpose. Update the next_stage mask accordingly.
+          */
          next_stage_mask |= VK_SHADER_STAGE_GEOMETRY_BIT;
+      }
 
       /* If this VS might get paired with a geometry or tessellation shader
        * then we'll use the compute version in that case.
@@ -1578,7 +1612,7 @@ panvk_compile_shader(struct panvk_device *dev,
 
       nir_shader *count = NULL, *rast = NULL, *pre = NULL;
       NIR_PASS(_, main, poly_nir_lower_gs, &count, &rast, &pre,
-               &shader->gs_info);
+               &shader->gs.gs_info);
 
       assert(!pre || pre->info.stage == MESA_SHADER_COMPUTE);
       panvk_nir_make_compute_shader(count);
@@ -2052,13 +2086,17 @@ panvk_deserialize_shader(struct vk_device *vk_dev, struct blob_reader *blob,
    if (blob->overrun)
       return vk_error(device, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
 
-   size_t size =
-      sizeof(struct panvk_shader) +
-      sizeof(struct panvk_shader_variant) * panvk_shader_num_variants(stage);
-   shader =
-      vk_shader_zalloc(vk_dev, &panvk_shader_ops, stage, pAllocator, size);
-   if (shader == NULL)
-      return panvk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+   uint16_t xfb_output_count = 0;
+   if (stage == MESA_SHADER_VERTEX) {
+      xfb_output_count = blob_read_uint16(blob);
+      if (blob->overrun)
+         return vk_error(device, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
+   }
+
+   result = panvk_alloc_shader(device, stage, xfb_output_count, pAllocator,
+                               &shader);
+   if (result != VK_SUCCESS)
+      return result;
 
    result = shader_desc_info_deserialize(device, blob, shader);
    if (result != VK_SUCCESS) {
@@ -2066,10 +2104,29 @@ panvk_deserialize_shader(struct vk_device *vk_dev, struct blob_reader *blob,
       return result;
    }
 
-   if (shader->vk.stage == MESA_SHADER_GEOMETRY) {
-      blob_copy_bytes(blob, &shader->gs_info, sizeof(shader->gs_info));
+   switch (shader->vk.stage) {
+   case MESA_SHADER_VERTEX:
+      if (xfb_output_count != 0) {
+         blob_copy_bytes(blob, shader->vs.xfb_stride,
+                         sizeof(shader->vs.xfb_stride));
+         if (blob->overrun)
+            return vk_error(device, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
+
+         blob_copy_bytes(blob, shader->vs.xfb_info,
+                         nir_xfb_info_size(xfb_output_count));
+         if (blob->overrun)
+            return vk_error(device, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
+      }
+      break;
+
+   case MESA_SHADER_GEOMETRY:
+      blob_copy_bytes(blob, &shader->gs.gs_info, sizeof(shader->gs.gs_info));
       if (blob->overrun)
          return vk_error(device, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
+      break;
+
+   default:
+      break;
    }
 
    panvk_shader_foreach_variant(shader, variant) {
@@ -2169,10 +2226,32 @@ panvk_shader_serialize(struct vk_device *vk_dev,
 
    blob_write_uint8(blob, vk_shader->stage);
 
+   uint16_t xfb_output_count = 0;
+   if (vk_shader->stage == MESA_SHADER_VERTEX) {
+      xfb_output_count = shader->vs.xfb_info ?
+         shader->vs.xfb_info->output_count : 0;
+      blob_write_uint16(blob, xfb_output_count);
+   }
+
    shader_desc_info_serialize(blob, shader);
 
-   if (shader->vk.stage == MESA_SHADER_GEOMETRY)
-      blob_write_bytes(blob, &shader->gs_info, sizeof(shader->gs_info));
+   switch (shader->vk.stage) {
+   case MESA_SHADER_VERTEX:
+      if (xfb_output_count != 0) {
+         blob_write_bytes(blob, shader->vs.xfb_stride,
+                          sizeof(shader->vs.xfb_stride));
+         blob_write_bytes(blob, shader->vs.xfb_info,
+                          nir_xfb_info_size(xfb_output_count));
+      }
+      break;
+
+   case MESA_SHADER_GEOMETRY:
+      blob_write_bytes(blob, &shader->gs.gs_info, sizeof(shader->gs.gs_info));
+      break;
+
+   default:
+      break;
+   }
 
    panvk_shader_foreach_variant(shader, variant) {
       panvk_shader_serialize_variant(vk_dev, variant, blob);

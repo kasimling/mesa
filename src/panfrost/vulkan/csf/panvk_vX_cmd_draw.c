@@ -789,7 +789,7 @@ prepare_poly(struct panvk_cmd_buffer *cmdbuf,
 
    cmdbuf->state.gfx.poly.vp_addr = vp_mem.gpu;
 
-   const struct poly_gs_info *gsi = &gs->gs_info;
+   const struct poly_gs_info *gsi = &gs->gs.gs_info;
    const struct panvk_shader *tes = cmdbuf->state.gfx.tes.shader;
    const bool indirect_draw = draw->indirect.buffer_dev_addr ||
                               draw->index.restart_enable || tes;
@@ -3011,7 +3011,7 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
    const struct panvk_shader_variant *vs =
       panvk_sw_vs_variant(cmdbuf->state.gfx.vs.shader);
    const struct panvk_shader *gs = cmdbuf->state.gfx.gs.shader;
-   const struct poly_gs_info *gsi = &gs->gs_info;
+   const struct poly_gs_info *gsi = &gs->gs.gs_info;
 
    assert(!cmdbuf->state.gfx.tes.shader);
    const struct panvk_shader_variant *tes = NULL;
@@ -3135,7 +3135,7 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
                cmdbuf->state.gfx.poly.gp_addr +
                offsetof(struct poly_geometry_params, draw),
             .indirect.draw_count = 1,
-            .prim = gs->gs_info.mode,
+            .prim = gs->gs.gs_info.mode,
          };
       } else {
          return (struct panvk_draw_info) {
@@ -3146,7 +3146,7 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
             .index.restart_enable = true,
             .vertex.count = gp->draw.index_count,
             .instance.count = gp->draw.instance_count,
-            .prim = gs->gs_info.mode,
+            .prim = gs->gs.gs_info.mode,
          };
       }
    } else {
@@ -3156,14 +3156,14 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
                cmdbuf->state.gfx.poly.gp_addr +
                offsetof(struct poly_geometry_params, draw),
             .indirect.draw_count = 1,
-            .prim = gs->gs_info.mode,
+            .prim = gs->gs.gs_info.mode,
          };
       } else {
          return (struct panvk_draw_info) {
             .vertex.count = gp->draw.vertex_count,
             .vertex.base = gp->draw.first_vertex,
             .instance.count = gp->draw.instance_count,
-            .prim = gs->gs_info.mode,
+            .prim = gs->gs.gs_info.mode,
          };
       }
    }
