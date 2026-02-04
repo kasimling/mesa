@@ -45,6 +45,26 @@ panlib_gs_setup_indirect(global struct poly_vertex_params *vp /* output */,
                           is_prefix_summing, max_indices, shape);
 }
 
+KERNEL(1)
+panlib_gs_setup_indirect_byte_count(global struct poly_vertex_params *vp /* output */,
+                                    global struct poly_geometry_params *gp /* output */,
+                                    global struct poly_heap *heap,
+                                    constant uint *byte_count,
+                                    uint instance_count,
+                                    uint counter_offset,
+                                    uint vertex_stride,
+                                    uint64_t vs_outputs /* Vertex (TES) output mask */,
+                                    uint prim /* Input primitive type, mesa_prim */,
+                                    uint is_prefix_summing,
+                                    uint max_indices,
+                                    uint shape /* poly_gs_shape */)
+{
+   poly_gs_setup_indirect_byte_count(byte_count, instance_count, counter_offset,
+                                     vertex_stride, vp, gp, heap, vs_outputs,
+                                     prim, is_prefix_summing, max_indices,
+                                     shape);
+}
+
 KERNEL(256)
 panlib_prefix_sum_geom(global struct poly_geometry_params *gp)
 {
