@@ -1480,6 +1480,9 @@ panvk_compile_shader(struct panvk_device *dev,
    case MESA_SHADER_VERTEX: {
       VkShaderStageFlags next_stage_mask = info->next_stage_mask;
 
+      if (PANVK_DEBUG(FORCE_PASSTHROUGH_GS))
+         next_stage_mask |= VK_SHADER_STAGE_GEOMETRY_BIT;
+
       if (info->nir->xfb_info != NULL) {
          memcpy(shader->vs.xfb_stride, info->nir->info.xfb_stride,
                 sizeof(info->nir->info.xfb_stride));

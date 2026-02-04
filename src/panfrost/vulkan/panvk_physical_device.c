@@ -155,6 +155,10 @@ init_shader_caches(struct panvk_physical_device *device,
    _mesa_blake3_update(&blake3_ctx, &device->kmod.dev->props.gpu_id,
                      sizeof(device->kmod.dev->props.gpu_id));
 
+   bool force_passthrough_gs = PANVK_DEBUG(FORCE_PASSTHROUGH_GS);
+   _mesa_blake3_update(&blake3_ctx, &force_passthrough_gs,
+                       sizeof(force_passthrough_gs));
+
    unsigned char blake3[BLAKE3_KEY_LEN];
    _mesa_blake3_final(&blake3_ctx, blake3);
 

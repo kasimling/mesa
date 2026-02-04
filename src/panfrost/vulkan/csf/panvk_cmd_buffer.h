@@ -871,7 +871,8 @@ panvk_get_subqueue_stages(struct panvk_device *dev,
     */
     bool may_compute_vs =
        dev->vk.enabled_features.geometryShader ||
-       dev->vk.enabled_features.transformFeedback;
+       dev->vk.enabled_features.transformFeedback ||
+       PANVK_DEBUG(FORCE_PASSTHROUGH_GS);
 
    switch (subqueue) {
    case PANVK_SUBQUEUE_VERTEX_TILER:

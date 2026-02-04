@@ -350,7 +350,7 @@ panvk_per_arch(get_physical_device_features)(
       .uniformAndStorageBuffer16BitAccess = true,
       .storagePushConstant16 = true,
       .storageInputOutput16 = true,
-      .multiview = true,
+      .multiview = !PANVK_DEBUG(FORCE_PASSTHROUGH_GS),
       .multiviewGeometryShader = false,
       .multiviewTessellationShader = false,
       .variablePointersStorageBuffer = true,

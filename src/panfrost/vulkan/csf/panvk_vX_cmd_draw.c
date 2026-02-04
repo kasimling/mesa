@@ -995,7 +995,7 @@ prepare_passthrough_gs(struct panvk_cmd_buffer *cmdbuf,
    uint32_t xfb_outputs = vs->vs.xfb_info ? vs->vs.xfb_info->output_count : 0;
    /* TODO: we could take into account which xfb buffers are actually bound
     * and whether xfb is active */
-   bool needs_gs = xfb_outputs != 0;
+   bool needs_gs = xfb_outputs != 0 || PANVK_DEBUG(FORCE_PASSTHROUGH_GS);
 
    /* If we have a passthrough GS bound that we don't need anymore, unbind it */
    if (!needs_gs && gs && gs->gs.is_passthrough) {
