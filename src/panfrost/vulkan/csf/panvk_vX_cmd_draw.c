@@ -3219,9 +3219,6 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
    assert(!is_multiview); /* TODO: multiview */
    assert(!is_multidraw); /* TODO: multidraw */
 
-   /* TODO: hook up DrawIndirectByteCount in libpoly */
-   assert(!draw_is_byte_count_indirect(&draw));
-
    /* libpoly CS dispatches are sequential, so we use PANVK_CSF_BARRIER_WAIT for
     * every dispatch except the last */
    unsigned dispatches_left = 0;
@@ -3238,7 +3235,28 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
    if (main->bin_size)
       dispatches_left++;
 
-   if (is_indirect) {
+   if (draw_is_byte_count_indirect(&draw)) {
+      dispatches_left--;
+      struct panlib_gs_setup_indirect_byte_count_args setup = {
+         .vp = cmdbuf->state.gfx.poly.vp_addr,
+         .gp = cmdbuf->state.gfx.poly.gp_addr,
+         .heap = dev->poly_heap.state_addr,
+         .byte_count = draw.indirect.buffer_dev_addr,
+         .instance_count = draw.instance.count,
+         .counter_offset = draw.indirect.counter_offset,
+         .vertex_stride = draw.indirect.vertex_stride,
+         .vs_outputs = tes ? tes->info.outputs_written
+                           : vs->info.outputs_written,
+         .prim = draw.prim,
+         .is_prefix_summing = gsi->prefix_sum,
+         .max_indices = gsi->max_indices,
+         .shape = gsi->shape,
+      };
+      enum panlib_barrier barrier = dispatches_left > 0 ?
+         PANLIB_BARRIER_CSF_WAIT : PANLIB_BARRIER_CSF_SYNC;
+      panlib_gs_setup_indirect_byte_count_struct(&ctx, panlib_1d(1), barrier,
+                                                 setup);
+   } else if (is_indirect) {
       dispatches_left--;
       struct panlib_gs_setup_indirect_args setup = {
          .vp = cmdbuf->state.gfx.poly.vp_addr,
