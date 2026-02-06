@@ -257,7 +257,8 @@ panvk_per_arch(EndCommandBuffer)(VkCommandBuffer commandBuffer)
 }
 
 static void
-add_execution_dependency(uint32_t wait_masks[static PANVK_SUBQUEUE_COUNT],
+add_execution_dependency(struct panvk_device *dev,
+                         uint32_t wait_masks[static PANVK_SUBQUEUE_COUNT],
                          VkPipelineStageFlags2 src_stages,
                          VkPipelineStageFlags2 dst_stages)
 {
@@ -265,7 +266,8 @@ add_execution_dependency(uint32_t wait_masks[static PANVK_SUBQUEUE_COUNT],
    uint32_t src_subqueues = 0;
    uint32_t dst_subqueues = 0;
    for (uint32_t i = 0; i < PANVK_SUBQUEUE_COUNT; i++) {
-      const VkPipelineStageFlags2 subqueue_stages = panvk_get_subqueue_stages(i);
+      const VkPipelineStageFlags2 subqueue_stages =
+         panvk_get_subqueue_stages(dev, i);
       if (src_stages & subqueue_stages)
          src_subqueues |= BITFIELD_BIT(i);
       if (dst_stages & subqueue_stages)
@@ -288,7 +290,7 @@ add_execution_dependency(uint32_t wait_masks[static PANVK_SUBQUEUE_COUNT],
           * load/store operations are synchronized with the LS scoreboard
           * immediately after the read, so no need to wait in that case.
           */
-         if ((src_stages & panvk_get_subqueue_stages(i)) ==
+         if ((src_stages & panvk_get_subqueue_stages(dev, i)) ==
              VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT)
             wait_mask &= ~BITFIELD_BIT(i);
          break;
@@ -370,13 +372,14 @@ add_memory_dependency(struct panvk_cache_flush_info *cache_flush,
 }
 
 static void
-collect_cache_flush_info(enum panvk_subqueue_id subqueue,
+collect_cache_flush_info(struct panvk_device *dev,
+                         enum panvk_subqueue_id subqueue,
                          struct panvk_cache_flush_info *cache_flush,
                          VkAccessFlags2 src_access, VkAccessFlags2 dst_access)
 {
    /* limit access to the subqueue and host */
    const VkPipelineStageFlags2 subqueue_stages =
-      panvk_get_subqueue_stages(subqueue) | VK_PIPELINE_STAGE_2_HOST_BIT;
+      panvk_get_subqueue_stages(dev, subqueue) | VK_PIPELINE_STAGE_2_HOST_BIT;
    src_access = vk_filter_src_access_flags2(subqueue_stages, src_access);
    dst_access = vk_filter_dst_access_flags2(subqueue_stages, dst_access);
 
@@ -390,7 +393,7 @@ collect_cs_deps(struct panvk_cmd_buffer *cmdbuf, const VkDependencyInfo *info,
 {
    struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
    uint32_t wait_masks[PANVK_SUBQUEUE_COUNT] = {0};
-   add_execution_dependency(wait_masks, src.stages, dst.stages);
+   add_execution_dependency(dev, wait_masks, src.stages, dst.stages);
 
    if (cmdbuf->state.gfx.render.tiler || inherits_render_ctx(cmdbuf)) {
       if (info->dependencyFlags & VK_DEPENDENCY_BY_REGION_BIT) {
@@ -445,7 +448,7 @@ collect_cs_deps(struct panvk_cmd_buffer *cmdbuf, const VkDependencyInfo *info,
          deps->src[i].wait_sb_mask |= dev->csf.sb.all_iters_mask;
       }
 
-      collect_cache_flush_info(i, &deps->src[i].cache_flush, src.access,
+      collect_cache_flush_info(dev, i, &deps->src[i].cache_flush, src.access,
                                dst.access);
 
       deps->dst[i].wait_subqueue_mask |= wait_masks[i];
