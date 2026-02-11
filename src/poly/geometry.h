@@ -321,8 +321,13 @@ struct poly_geometry_draw_params {
     * efficiently.
     */
    uint32_t primitives_log2;
+
+   /* Total count of input primitives across all instances from previous
+    * draws, calculated by poly_prefix_sum_multidraw.
+    */
+   uint32_t previous_primitives;
 } PACKED;
-static_assert(sizeof(struct poly_geometry_draw_params) == 15 * 4,
+static_assert(sizeof(struct poly_geometry_draw_params) == 16 * 4,
               "struct poly_geometry_draw_params must be 16 words");
 
 static inline void
@@ -560,6 +565,18 @@ poly_work_group_scan_inclusive_add(uint x, local uint *scratch)
    return (uint2)(prefix, reduction);
 }
 
+/*
+ * Returns (work_group_scan_exclusive_add(x), work_group_sum(x)).
+ */
+static inline uint2
+poly_work_group_scan_exclusive_add(uint x, local uint *scratch)
+{
+   /* There isn't a more efficient way to implement this than just doing the
+    * inclusive sum and subtracting the current thread. */
+   uint2 sums = poly_work_group_scan_inclusive_add(x, scratch);
+   return (uint2)(sums[0] - x, sums[1]);
+}
+
 static inline void
 poly_prefix_sum(local uint *scratch, global uint *buffer, uint len, uint words,
                 uint word, uint wg_count)
@@ -592,6 +609,60 @@ poly_prefix_sum(local uint *scratch, global uint *buffer, uint len, uint words,
    }
 }
 
+/* Counts the total number of primitives across all draws, allocates the count
+ * buffer, and writes per-draw count buffer offsets
+ *
+ * is_prefix_summing refers to prefix sum across primitives in the count
+ * buffer, not across draws. */
+static inline void
+poly_prefix_sum_multidraw(local uint *scratch,
+                          global struct poly_geometry_params *p,
+                          global struct poly_geometry_draw_params *dps,
+                          global struct poly_heap *heap,
+                          global uint *draw_count_buffer, uint max_draw_count,
+                          uint is_prefix_summing, uint wg_count)
+{
+   uint tid = cl_local_id.x;
+
+   uint draw_count = draw_count_buffer ?
+      MIN2(*draw_count_buffer, max_draw_count) : max_draw_count;
+
+   /* Main loop: complete workgroups processing multiple values at once */
+   uint i, total_primitives = 0;
+   uint len_remainder = draw_count % wg_count;
+   uint len_rounded_down = draw_count - len_remainder;
+
+   for (i = tid; i < len_rounded_down; i += wg_count) {
+      global struct poly_geometry_draw_params *dp = &dps[i];
+
+      uint value = dp->input_primitives;
+      uint2 sums = poly_work_group_scan_exclusive_add(value, scratch);
+
+      dp->previous_primitives = total_primitives + sums[0];
+      total_primitives += sums[1];
+   }
+
+   /* The last iteration is special since we won't have a full subgroup unless
+    * the length is divisible by the subgroup size, and we don't advance count.
+    */
+   global struct poly_geometry_draw_params *dp = &dps[i];
+   uint value = (tid < len_remainder) ? dp->input_primitives : 0;
+   uint2 sums = poly_work_group_scan_exclusive_add(value, scratch);
+
+   if (tid < len_remainder) {
+      dp->previous_primitives = total_primitives + sums[0];
+   }
+   total_primitives += sums[1];
+
+   p->total_input_primitives = total_primitives;
+
+   if (tid == 0 && is_prefix_summing) {
+      p->count_buffer = poly_heap_alloc(
+         heap, total_primitives * p->count_buffer_stride);
+   }
+}
+
+
 static inline void
 poly_increment_counters(global uint32_t *a, global uint32_t *b,
                         global uint32_t *c, uint count)
@@ -623,6 +694,7 @@ poly_increment_ia(global uint32_t *ia_vertices, global uint32_t *ia_primitives,
 
 static inline void
 poly_gs_setup_indirect(uint64_t index_buffer, constant uint *draw,
+                       uint32_t draw_id, uint32_t draw_stride,
                        global struct poly_vertex_params *vp /* output */,
                        global struct poly_geometry_params *p /* output */,
                        global struct poly_geometry_draw_params *dp /* output */,
@@ -632,8 +704,12 @@ poly_gs_setup_indirect(uint64_t index_buffer, constant uint *draw,
                        uint32_t index_buffer_range_el,
                        uint32_t prim /* Input primitive type, enum mesa_prim */,
                        int is_prefix_summing, uint max_indices,
-                       enum poly_gs_shape shape)
+                       int is_multidraw, enum poly_gs_shape shape)
 {
+   draw = (constant uint *) ((constant uint8_t *) draw + draw_id * draw_stride);
+   vp += draw_id;
+   dp += draw_id;
+
    /* Determine the (primitives, instances) grid size. */
    uint vertex_count = draw[0];
    uint instance_count = draw[1];
@@ -641,7 +717,8 @@ poly_gs_setup_indirect(uint64_t index_buffer, constant uint *draw,
    poly_vertex_params_set_draw(vp, vertex_count, instance_count);
    poly_geometry_params_set_draw(dp, prim, shape, max_indices,
                                  vertex_count, instance_count);
-   poly_geometry_params_set_single_draw(p, dp);
+   if (!is_multidraw)
+      poly_geometry_params_set_single_draw(p, dp);
 
    /* If indexing is enabled, the third word is the offset into the index buffer
     * in elements. Apply that offset now that we have it. For a hardware
@@ -660,7 +737,9 @@ poly_gs_setup_indirect(uint64_t index_buffer, constant uint *draw,
    uint vertex_buffer_size =
       poly_tcs_in_size(vertex_count * instance_count, vs_outputs);
 
-   if (is_prefix_summing) {
+   /* With multidraw, the count buffer will be allocated across all draws in
+    * poly_prefix_sum_multidraw */
+   if (is_prefix_summing && !is_multidraw) {
       p->count_buffer = poly_heap_alloc(
          heap, dp->input_primitives * p->count_buffer_stride);
    }

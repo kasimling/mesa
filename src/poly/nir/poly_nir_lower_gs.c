@@ -410,13 +410,13 @@ write_xfb_counts(nir_builder *b, nir_intrinsic_instr *intr,
       return;
 
    /* Store each required counter */
-   nir_def *id =
-      state->info->prefix_sum ? calc_unrolled_id(b) : nir_imm_int(b, 0);
-
    nir_def *addr =
       poly_load_xfb_count_address(b, nir_load_geometry_param_buffer_poly(b),
+                                  nir_load_geometry_draw_param_buffer_poly(b),
                                   nir_imm_int(b, state->count_index[stream]),
-                                  nir_imm_int(b, state->info->count_words), id);
+                                  nir_imm_int(b, state->info->count_words),
+                                  nir_imm_bool(b, state->info->prefix_sum),
+                                  calc_unrolled_id(b), nir_load_draw_id(b));
 
    if (state->info->prefix_sum) {
       nir_store_global(b, intr->src[2].ssa, addr);
@@ -784,10 +784,12 @@ create_gs_rast_shader(const nir_shader *gs, const struct lower_gs_state *state)
              */
             nir_def *invocation_base = poly_previous_xfb_primitives(
                b, nir_load_geometry_param_buffer_poly(b),
+               nir_load_geometry_draw_param_buffer_poly(b),
                nir_imm_int(b, state->static_count[stream]),
                nir_imm_int(b, state->count_index[stream]),
                nir_imm_int(b, state->info->count_words),
-               nir_imm_bool(b, state->info->prefix_sum), unrolled);
+               nir_imm_bool(b, state->info->prefix_sum), unrolled,
+               nir_load_draw_id(b));
 
             nir_def *index = poly_xfb_vertex_offset(
                b, n, invocation_base, base, id_in_strip, p,
