@@ -29,6 +29,7 @@ panlib_unroll_restart(global uint32_t *out_draw,
 KERNEL(1)
 panlib_gs_setup_indirect(global struct poly_vertex_params *vp /* output */,
                          global struct poly_geometry_params *gp /* output */,
+                         global struct poly_geometry_draw_params *gdp /* output */,
                          global struct poly_heap *heap,
                          uint64_t index_buffer,
                          uint32_t index_size_B /* 0 if no index bffer */,
@@ -40,14 +41,15 @@ panlib_gs_setup_indirect(global struct poly_vertex_params *vp /* output */,
                          uint max_indices,
                          uint shape /* poly_gs_shape */)
 {
-   poly_gs_setup_indirect(index_buffer, draw, vp, gp, heap, vs_outputs,
-                          index_size_B, index_buffer_range_el, prim,
-                          is_prefix_summing, max_indices, shape);
+   poly_gs_setup_indirect(index_buffer, draw, 0, 0, vp, gp, gdp, heap,
+                          vs_outputs, index_size_B, index_buffer_range_el, prim,
+                          is_prefix_summing, max_indices, false, shape);
 }
 
 KERNEL(1)
 panlib_gs_setup_indirect_byte_count(global struct poly_vertex_params *vp /* output */,
                                     global struct poly_geometry_params *gp /* output */,
+                                    global struct poly_geometry_draw_params *gdp /* output */,
                                     global struct poly_heap *heap,
                                     constant uint *byte_count,
                                     uint instance_count,
@@ -60,16 +62,16 @@ panlib_gs_setup_indirect_byte_count(global struct poly_vertex_params *vp /* outp
                                     uint shape /* poly_gs_shape */)
 {
    poly_gs_setup_indirect_byte_count(byte_count, instance_count, counter_offset,
-                                     vertex_stride, vp, gp, heap, vs_outputs,
-                                     prim, is_prefix_summing, max_indices,
-                                     shape);
+                                     vertex_stride, vp, gp, gdp, heap,
+                                     vs_outputs, prim, is_prefix_summing,
+                                     max_indices, shape);
 }
 
 KERNEL(256)
 panlib_prefix_sum_geom(global struct poly_geometry_params *gp)
 {
    POLY_DECL_PREFIX_SUM_SCRATCH(scratch, 16, 256);
-   poly_prefix_sum(scratch, gp->count_buffer, gp->input_primitives,
+   poly_prefix_sum(scratch, gp->count_buffer, gp->total_input_primitives,
                    gp->count_buffer_stride / 4, cl_group_id.x, 256);
 }
 

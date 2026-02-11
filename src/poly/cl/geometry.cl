@@ -256,22 +256,33 @@ poly_input_vertices(constant struct poly_vertex_params *p)
 }
 
 global uint *
-poly_load_xfb_count_address(constant struct poly_geometry_params *p, int index,
-                             int count_words, uint unrolled_id)
+poly_load_xfb_count_address(constant struct poly_geometry_params *p,
+                            constant struct poly_geometry_draw_params *dp,
+                            int index, int count_words, bool prefix_sum,
+                            uint unrolled_id, uint draw_id)
 {
-   return &p->count_buffer[(unrolled_id * count_words) + index];
+   uint invocation_index = prefix_sum ? dp->previous_primitives + unrolled_id
+                                      : draw_id;
+   return &p->count_buffer[(invocation_index * count_words) + index];
 }
 
 uint
 poly_previous_xfb_primitives(global struct poly_geometry_params *p,
+                             global struct poly_geometry_draw_params *dp,
                              int static_count, int count_index, int count_words,
-                             bool prefix_sum, uint unrolled_id)
+                             bool prefix_sum, uint unrolled_id, uint draw_id)
 {
+   /* If dp is NULL, then we are calculating across all draws and there are no
+    * primitives from previous draws
+    */
+   uint previous_in_primitives = dp ? dp->previous_primitives : 0;
+   uint input_primitive_id = previous_in_primitives + unrolled_id;
+
    if (static_count >= 0) {
       /* If the number of outputted vertices per invocation is known statically,
        * we can calculate the base.
        */
-      return unrolled_id * static_count;
+      return input_primitive_id * static_count;
    } else {
       /* Otherwise, load from the count buffer buffer. Note that the sums are
        * inclusive, so index 0 is nonzero. This requires a little fixup here. We
@@ -279,10 +290,11 @@ poly_previous_xfb_primitives(global struct poly_geometry_params *p,
        *
        * If we didn't prefix sum, there's only one element.
        */
-      uint prim_minus_1 = prefix_sum ? sub_sat(unrolled_id, 1u) : 0;
-      uint count = p->count_buffer[(prim_minus_1 * count_words) + count_index];
+      uint invocation_index = prefix_sum ? input_primitive_id : draw_id;
+      uint index_minus_1 = sub_sat(invocation_index, 1u);
+      uint count = p->count_buffer[(index_minus_1 * count_words) + count_index];
 
-      return unrolled_id == 0 ? 0 : count;
+      return invocation_index == 0 ? 0 : count;
    }
 }
 
@@ -307,9 +319,10 @@ poly_pre_gs(global struct poly_geometry_params *p, uint streams,
    /* Determine the number of primitives generated in each stream */
    uint4 in_prims = 0;
    poly_foreach_xfb(streams, i) {
-      in_prims[i] = poly_previous_xfb_primitives(p, static_count[i],
+      in_prims[i] = poly_previous_xfb_primitives(p, NULL, static_count[i],
                                                  count_index[i], count_words,
-                                                 prefix_sum, unrolled_in_prims);
+                                                 prefix_sum, unrolled_in_prims,
+                                                 0);
 
       *(p->prims_generated_counter[i]) += in_prims[i];
    }
