@@ -66,20 +66,48 @@ KERNEL(1)
 panlib_gs_setup_indirect(global struct poly_vertex_params *vp /* output */,
                          global struct poly_geometry_params *gp /* output */,
                          global struct poly_geometry_draw_params *gdp /* output */,
+                         global uint32_t *first_vertex_fau /* output */,
+                         global uint32_t *base_instance_fau /* output */,
                          global struct poly_heap *heap,
                          uint64_t index_buffer,
                          uint32_t index_size_B /* 0 if no index bffer */,
                          uint32_t index_buffer_range_el,
                          constant uint *draw,
+                         uint32_t draw_stride,
+                         uint32_t fau_stride,
                          uint64_t vs_outputs /* Vertex (TES) output mask */,
                          uint prim /* Input primitive type, mesa_prim */,
                          uint is_prefix_summing,
                          uint max_indices,
+                         uint is_multidraw,
                          uint shape /* poly_gs_shape */)
 {
-   poly_gs_setup_indirect(index_buffer, draw, 0, 0, vp, gp, gdp, heap,
-                          vs_outputs, index_size_B, index_buffer_range_el, prim,
-                          is_prefix_summing, max_indices, false, shape);
+   uint32_t draw_id = cl_group_id.x;
+   poly_gs_setup_indirect(index_buffer, draw, draw_id, draw_stride, vp, gp, gdp,
+                          heap, vs_outputs, index_size_B, index_buffer_range_el,
+                          prim, is_prefix_summing, max_indices, is_multidraw,
+                          shape);
+
+   /* Patch per-draw FAU values */
+   draw = (constant uint *) ((constant uint8_t *) draw + draw_id * draw_stride);
+   first_vertex_fau = (global uint32_t *) (
+      (global uint8_t *) first_vertex_fau + draw_id * fau_stride);
+   base_instance_fau = (global uint32_t *) (
+      (global uint8_t *) base_instance_fau + draw_id * fau_stride);
+   /* If these are unused in the VS, the CPU will pass the OOB address. Any
+    * 32-bit offset of the base OOB address is still OOB, so we are good to
+    * write to these without checking */
+   if (index_size_B) {
+      constant VkDrawIndexedIndirectCommand *cmd =
+         (constant VkDrawIndexedIndirectCommand *) draw;
+      *first_vertex_fau = cmd->vertexOffset;
+      *base_instance_fau = cmd->firstInstance;
+   } else {
+      constant VkDrawIndirectCommand *cmd =
+         (constant VkDrawIndirectCommand *) draw;
+      *first_vertex_fau = cmd->firstVertex;
+      *base_instance_fau = cmd->firstInstance;
+   }
 }
 
 KERNEL(1)
@@ -109,6 +137,18 @@ panlib_prefix_sum_geom(global struct poly_geometry_params *gp)
    POLY_DECL_PREFIX_SUM_SCRATCH(scratch, 16, 256);
    poly_prefix_sum(scratch, gp->count_buffer, gp->total_input_primitives,
                    gp->count_buffer_stride / 4, cl_group_id.x, 256);
+}
+
+KERNEL(256)
+panlib_prefix_sum_multidraw(global struct poly_geometry_params *gp,
+                            global struct poly_geometry_draw_params *gdp,
+                            global struct poly_heap *heap,
+                            global uint *draw_count_buffer,
+                            uint is_prefix_summing, uint max_draw_count)
+{
+   POLY_DECL_PREFIX_SUM_SCRATCH(scratch, 16, 256);
+   poly_prefix_sum_multidraw(scratch, gp, gdp, heap, draw_count_buffer,
+                             max_draw_count, is_prefix_summing, 256);
 }
 
 #endif
