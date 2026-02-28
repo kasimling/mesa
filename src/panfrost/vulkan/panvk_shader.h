@@ -184,6 +184,9 @@ struct panvk_graphics_sysvals {
       int32_t first_vertex;
       int32_t base_instance;
       uint32_t noperspective_varyings;
+
+      /* Only used for SW VS, HW VS passes draw ID through a preload register */
+      uint32_t draw_id;
    } vs;
 
    struct {

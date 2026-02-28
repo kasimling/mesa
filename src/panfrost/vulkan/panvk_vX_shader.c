@@ -116,6 +116,17 @@ panvk_lower_sysvals(nir_builder *b, nir_instr *instr, void *data)
 #endif
 
    case nir_intrinsic_load_draw_id:
+      /* Draw ID is only available in VS, so all HW compute shaders here are
+       * compute VS */
+      bool is_compute_vs = b->shader->info.stage == MESA_SHADER_COMPUTE;
+      if (is_compute_vs) {
+         /* For HW VS, we pass draw ID through a preload register set as a
+          * RUN_IDVS argument. For SW VS, we don't have that mechanism and
+          * need to pass it through a sysval.  */
+         val = load_sysval(b, graphics, bit_size, vs.draw_id);
+         break;
+      }
+
       /* Multidraw is supported on v10. */
       if (PAN_ARCH >= 10)
          return false;
