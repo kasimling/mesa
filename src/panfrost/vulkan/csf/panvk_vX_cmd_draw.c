@@ -763,6 +763,12 @@ prepare_poly(struct panvk_cmd_buffer *cmdbuf,
    const struct panvk_shader_variant *vs =
       panvk_sw_vs_variant(cmdbuf->state.gfx.vs.shader);
 
+   bool is_indirect = draw->indirect.buffer_dev_addr != 0;
+   bool is_multidraw = is_indirect &&
+                       (draw->indirect.draw_count != 1 ||
+                        draw->indirect.count_buffer_dev_addr != 0);
+   uint32_t repeat_count = is_indirect ? draw->indirect.draw_count : 1;
+
    /* We use 1x1x1 workgroups and hope the hardware merges them. */
    const uint32_t wg_size[3] = {1, 1, 1};
 
@@ -779,14 +785,15 @@ prepare_poly(struct panvk_cmd_buffer *cmdbuf,
       vp->index_buffer_range_el = range_el;
    }
 
+   uint32_t vb_size = 0;
    if (!draw->indirect.buffer_dev_addr) {
       poly_vertex_params_set_draw(vp, draw->vertex.count, draw->instance.count);
 
-      const uint32_t vb_size =
+      vb_size =
          poly_tcs_in_size(draw->vertex.count * draw->instance.count,
                           vs->info.outputs_written);
       struct pan_ptr vb =
-         panvk_cmd_alloc_dev_mem(cmdbuf, desc, vb_size, 16);
+         panvk_cmd_alloc_dev_mem(cmdbuf, desc, vb_size * repeat_count, 16);
       if (vb_size && !vb.gpu)
          return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
@@ -801,9 +808,19 @@ prepare_poly(struct panvk_cmd_buffer *cmdbuf,
    }
 
    struct pan_ptr vp_mem =
-      panvk_cmd_upload_dev_mem(cmdbuf, desc, vp, sizeof(*vp), 8);
+      panvk_cmd_alloc_dev_mem(cmdbuf, desc, sizeof(*vp) * repeat_count, 8);
    if (!vp_mem.gpu)
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+
+   for (uint32_t i = 0; i < repeat_count; i++) {
+      struct poly_vertex_params *vp_draw =
+         (struct poly_vertex_params *) vp_mem.cpu + i;
+      memcpy(vp_draw, vp, sizeof(*vp));
+
+      /* Patch output_buffer pointers for multidraw */
+      if (vb_size != 0)
+         vp_draw->output_buffer = vp->output_buffer + i * vb_size;
+   }
 
    cmdbuf->state.gfx.poly.vp_addr = vp_mem.gpu;
 
@@ -840,7 +857,8 @@ prepare_poly(struct panvk_cmd_buffer *cmdbuf,
    } else {
       poly_geometry_params_set_draw(gdp, prim, gsi->shape, gsi->max_indices,
                                     draw->vertex.count, draw->instance.count);
-      poly_geometry_params_set_single_draw(gp, gdp);
+      if (!is_multidraw)
+         poly_geometry_params_set_single_draw(gp, gdp);
 
       if (gsi->shape == POLY_GS_SHAPE_DYNAMIC_INDEXED) {
          struct pan_ptr gs_index_buffer = panvk_cmd_alloc_dev_mem(
@@ -894,7 +912,7 @@ prepare_poly(struct panvk_cmd_buffer *cmdbuf,
       size_t count_buffer_size = 0;
 
       if (!gsi->prefix_sum)
-         count_buffer_size = gp->count_buffer_stride;
+         count_buffer_size = repeat_count * gp->count_buffer_stride;
       else if (!indirect_draw)
          count_buffer_size = gdp->input_primitives * gp->count_buffer_stride;
       /* For prefix summing indirect draws, the buffer is dynamically
@@ -916,12 +934,23 @@ prepare_poly(struct panvk_cmd_buffer *cmdbuf,
    cmdbuf->state.gfx.poly.gp_addr = gp_mem.gpu;
 
    struct pan_ptr gdp_mem =
-      panvk_cmd_upload_dev_mem(cmdbuf, desc, gdp, sizeof(*gdp), 8);
+      panvk_cmd_alloc_dev_mem(cmdbuf, desc, sizeof(*gdp) * repeat_count, 8);
    if (!gdp_mem.gpu)
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+   for (uint32_t i = 0; i < repeat_count; i++) {
+      struct poly_geometry_draw_params *draw_gdp =
+         (struct poly_geometry_draw_params *) gdp_mem.cpu + i;
+      memcpy(draw_gdp, gdp, sizeof(*gdp));
+
+      if (gsi->shape == POLY_GS_SHAPE_DYNAMIC_INDEXED && !indirect_draw) {
+         /* Each draw has it's own index buffer memory, so the pointers must
+          * be patched per-draw */
+         draw_gdp->output_index_buffer = gdp->output_index_buffer +
+                                         i * gdp->draw.index_count * 4;
+      }
+   }
 
    cmdbuf->state.gfx.poly.gdp_addr = gdp_mem.gpu;
-
 
    return VK_SUCCESS;
 }
@@ -3122,7 +3151,11 @@ launch_gfx_cs(struct panvk_cmd_buffer *cmdbuf,
     * draw info which changes every draw anyway so dirty checks won't actually
     * save us anything.
     */
-   if (!push_uniforms) {
+   if (!push_uniforms && cs->fau.total_count != 0) {
+      /* The purpose of per-dispatch FAU is to pass different values to each
+       * dispatch, which needs to be done by the caller */
+      assert(!info->indirect.per_dispatch_fau);
+
       struct pan_ptr push_uniforms_ptr;
       VkResult result = panvk_per_arch(cmd_prepare_gfx_push_uniforms)(
          cmdbuf, cs, &push_uniforms_ptr, 1);
@@ -3150,6 +3183,9 @@ static struct panvk_draw_info
 unroll_restart(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
 {
    struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
+
+   /* TODO */
+   assert(!draw.indirect.count_buffer_dev_addr);
 
    assert(draw.index.index_size);
    if (!draw.indirect.buffer_dev_addr) {
@@ -3209,6 +3245,39 @@ unroll_restart(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
    };
 }
 
+static uint64_t
+prepare_sw_vs_push_uniforms(struct panvk_cmd_buffer *cmdbuf,
+                            struct panvk_draw_info *draw)
+{
+   const struct panvk_shader_variant *vs = get_vs_variant(cmdbuf);
+
+   uint32_t repeat_count = MAX2(draw->indirect.draw_count, 1);
+
+   struct pan_ptr push_uniforms;
+   VkResult result = panvk_per_arch(cmd_prepare_gfx_push_uniforms)(
+         cmdbuf, vs, &push_uniforms, repeat_count);
+
+   if (result != VK_SUCCESS) {
+      vk_command_buffer_set_error(&cmdbuf->vk, result);
+      return 0;
+   }
+
+   uint32_t fau_stride = vs->fau.total_count * FAU_WORD_SIZE;
+
+   /* Starting from 1 because the default draw id is already 0 */
+   for (uint32_t draw_id = 1; draw_id < repeat_count; draw_id++) {
+      uint8_t *faus = (uint8_t *) push_uniforms.cpu + draw_id * fau_stride;
+
+      if (shader_uses_sysval(vs, graphics, vs.draw_id)) {
+         uint32_t offset = shader_remapped_sysval_offset(
+            vs, sysval_offset(graphics, vs.draw_id));
+         *(uint32_t *) (faus + offset) = draw_id;
+      }
+   }
+
+   return push_uniforms.gpu;
+}
+
 static struct panvk_draw_info
 launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
 {
@@ -3234,12 +3303,13 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
                         draw.indirect.count_buffer_dev_addr != 0);
 
    assert(!is_multiview); /* TODO: multiview */
-   assert(!is_multidraw); /* TODO: multidraw */
 
    /* libpoly CS dispatches are sequential, so we use PANVK_CSF_BARRIER_WAIT for
     * every dispatch except the last */
    unsigned dispatches_left = 0;
    if (is_indirect)
+      dispatches_left++;
+   if (is_multidraw)
       dispatches_left++;
    if (vs->bin_size)
       dispatches_left++;
@@ -3251,6 +3321,8 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
       dispatches_left++;
    if (main->bin_size)
       dispatches_left++;
+
+   uint64_t vs_push_uniforms = prepare_sw_vs_push_uniforms(cmdbuf, &draw);
 
    if (draw_is_byte_count_indirect(&draw)) {
       dispatches_left--;
@@ -3276,17 +3348,39 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
                                                  setup);
    } else if (is_indirect) {
       dispatches_left--;
+
+      uint32_t vs_fau_stride = vs->fau.total_count * FAU_WORD_SIZE;
+
+      uint64_t vs_first_vertex_fau = PAN_SHADER_OOB_ADDRESS;
+      if (shader_uses_sysval(vs, graphics, vs.first_vertex)) {
+         uint32_t offset = shader_remapped_sysval_offset(
+            vs, sysval_offset(graphics, vs.first_vertex));
+         vs_first_vertex_fau = vs_push_uniforms + offset;
+      }
+
+      uint64_t vs_base_instance_fau = PAN_SHADER_OOB_ADDRESS;
+      if (shader_uses_sysval(vs, graphics, vs.base_instance)) {
+         uint32_t offset = shader_remapped_sysval_offset(
+            vs, sysval_offset(graphics, vs.base_instance));
+         vs_base_instance_fau = vs_push_uniforms + offset;
+      }
+
       struct panlib_gs_setup_indirect_args setup = {
          .vp = cmdbuf->state.gfx.poly.vp_addr,
          .gp = cmdbuf->state.gfx.poly.gp_addr,
          .gdp = cmdbuf->state.gfx.poly.gdp_addr,
+         .first_vertex_fau = vs_first_vertex_fau,
+         .base_instance_fau = vs_base_instance_fau,
          .heap = dev->poly_heap.state_addr,
          .draw = draw.indirect.buffer_dev_addr,
+         .draw_stride = draw.indirect.stride,
+         .fau_stride = vs_fau_stride,
          .vs_outputs = tes ? tes->info.outputs_written
                            : vs->info.outputs_written,
          .prim = draw.prim,
          .is_prefix_summing = gsi->prefix_sum,
          .max_indices = gsi->max_indices,
+         .is_multidraw = is_multidraw,
          .shape = gsi->shape,
       };
 
@@ -3297,9 +3391,52 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
             draw.index.buffer_size / draw.index.index_size;
       }
 
+      struct panlib_precomp_grid grid;
+      if (draw.indirect.count_buffer_dev_addr) {
+         struct cs_builder *b =
+            panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_COMPUTE);
+
+         struct cs_index addr = cs_scratch_reg64(b, 0);
+         struct cs_index max_draw_count = cs_scratch_reg32(b, 2);
+
+         cs_move64_to(b, addr, draw.indirect.count_buffer_dev_addr);
+
+         cs_update_compute_ctx(b) {
+            cs_load32_to(b, cs_sr_reg32(b, COMPUTE, JOB_SIZE_X), addr, 0);
+            cs_move32_to(b, cs_sr_reg32(b, COMPUTE, JOB_SIZE_Y), 1);
+            cs_move32_to(b, cs_sr_reg32(b, COMPUTE, JOB_SIZE_Z), 1);
+
+            cs_move32_to(b, max_draw_count, draw.indirect.draw_count);
+            cs_umin32(b, cs_sr_reg32(b, COMPUTE, JOB_SIZE_X),
+                      cs_sr_reg32(b, COMPUTE, JOB_SIZE_X), max_draw_count);
+         }
+
+         grid = panlib_dynamic_csf();
+      } else {
+         grid = panlib_1d(draw.indirect.draw_count);
+      }
+
       enum panlib_barrier barrier = dispatches_left > 0 ?
          PANLIB_BARRIER_CSF_WAIT : PANLIB_BARRIER_CSF_SYNC;
-      panlib_gs_setup_indirect_struct(&ctx, panlib_1d(1), barrier, setup);
+      panlib_gs_setup_indirect_struct(&ctx, grid, barrier, setup);
+   }
+
+   if (is_multidraw) {
+      dispatches_left--;
+
+      struct panlib_prefix_sum_multidraw_args setup = {
+         .gp = cmdbuf->state.gfx.poly.gp_addr,
+         .gdp = cmdbuf->state.gfx.poly.gdp_addr,
+         .heap = dev->poly_heap.state_addr,
+         .draw_count_buffer = draw.indirect.count_buffer_dev_addr,
+         .max_draw_count = draw.indirect.draw_count,
+         .is_prefix_summing = gsi->prefix_sum,
+      };
+
+      /* XXX: in theory this could run concurrently with the VS */
+      enum panlib_barrier barrier = dispatches_left > 0 ?
+         PANLIB_BARRIER_CSF_WAIT : PANLIB_BARRIER_CSF_SYNC;
+      panlib_prefix_sum_multidraw_struct(&ctx, panlib_1d(1), barrier, setup);
    }
 
    if (vs->bin_size) {
@@ -3308,9 +3445,14 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
       struct panvk_dispatch_info vs_disp;
       if (is_indirect) {
          vs_disp = (struct panvk_dispatch_info) {
+            .indirect.count = draw.indirect.draw_count,
+            .indirect.count_buffer_dev_addr =
+               draw.indirect.count_buffer_dev_addr,
             .indirect.buffer_dev_addr = cmdbuf->state.gfx.poly.vp_addr +
                offsetof(struct poly_vertex_params, grid),
-            .indirect.count = 1,
+            .indirect.stride = sizeof(struct poly_vertex_params),
+            .indirect.per_dispatch_fau = true,
+            .indirect.per_dispatch_srt = cmdbuf->state.gfx.vs.desc_repeat_count,
             .barrier = dispatches_left > 0 ? PANVK_CSF_BARRIER_WAIT
                                            : PANVK_CSF_BARRIER_SYNC,
          };
@@ -3326,7 +3468,9 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
                                            : PANVK_CSF_BARRIER_SYNC,
          };
       }
-      launch_gfx_cs(cmdbuf, vs, &cmdbuf->state.gfx.vs.desc, 0, &vs_disp);
+
+      launch_gfx_cs(cmdbuf, vs, &cmdbuf->state.gfx.vs.desc, vs_push_uniforms,
+                    &vs_disp);
    }
 
    struct panvk_dispatch_info gs_disp;
@@ -3334,7 +3478,10 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
       gs_disp = (struct panvk_dispatch_info) {
           .indirect.buffer_dev_addr = cmdbuf->state.gfx.poly.gdp_addr +
              offsetof(struct poly_geometry_draw_params, grid),
-          .indirect.count = 1,
+         .indirect.count = draw.indirect.draw_count,
+         .indirect.count_buffer_dev_addr =
+            draw.indirect.count_buffer_dev_addr,
+         .indirect.stride =  sizeof(struct poly_geometry_draw_params),
       };
    } else {
       assert(gdp->grid[2] == 1);
@@ -3377,6 +3524,8 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
       launch_gfx_cs(cmdbuf, pre, &cmdbuf->state.gfx.gs.desc, 0, &single_disp);
    }
 
+   /* TODO: if POLY_GS_SHAPE_STATIC_INDEXED and no XFB, we can probably limit
+    * to a single dispatch even with multidraw */
    if (main->bin_size) {
       dispatches_left--;
       gs_disp.barrier = dispatches_left > 0 ? PANVK_CSF_BARRIER_WAIT
@@ -3397,7 +3546,10 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
             .indirect.buffer_dev_addr =
                cmdbuf->state.gfx.poly.gdp_addr +
                offsetof(struct poly_geometry_draw_params, draw),
-            .indirect.draw_count = 1,
+            .indirect.stride = sizeof(struct poly_geometry_draw_params),
+            .indirect.draw_count = draw.indirect.draw_count,
+            .indirect.count_buffer_dev_addr =
+               draw.indirect.count_buffer_dev_addr,
             .prim = gs->gs.gs_info.mode,
          };
       } else {
@@ -3418,7 +3570,10 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
             .indirect.buffer_dev_addr =
                cmdbuf->state.gfx.poly.gdp_addr +
                offsetof(struct poly_geometry_draw_params, draw),
-            .indirect.draw_count = 1,
+            .indirect.draw_count = draw.indirect.draw_count,
+            .indirect.count_buffer_dev_addr =
+               draw.indirect.count_buffer_dev_addr,
+            .indirect.stride = sizeof(struct poly_geometry_draw_params),
             .prim = gs->gs.gs_info.mode,
          };
       } else {
