@@ -3310,6 +3310,7 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
          vs_disp = (struct panvk_dispatch_info) {
             .indirect.buffer_dev_addr = cmdbuf->state.gfx.poly.vp_addr +
                offsetof(struct poly_vertex_params, grid),
+            .indirect.count = 1,
             .barrier = dispatches_left > 0 ? PANVK_CSF_BARRIER_WAIT
                                            : PANVK_CSF_BARRIER_SYNC,
          };
@@ -3333,6 +3334,7 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
       gs_disp = (struct panvk_dispatch_info) {
           .indirect.buffer_dev_addr = cmdbuf->state.gfx.poly.gdp_addr +
              offsetof(struct poly_geometry_draw_params, grid),
+          .indirect.count = 1,
       };
    } else {
       assert(gdp->grid[2] == 1);

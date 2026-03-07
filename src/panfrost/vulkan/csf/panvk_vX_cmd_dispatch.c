@@ -295,7 +295,9 @@ panvk_per_arch(cmd_dispatch_shader)(
       cs_move32_to(b, cs_sr_reg32(b, COMPUTE, JOB_OFFSET_Y), 0);
       cs_move32_to(b, cs_sr_reg32(b, COMPUTE, JOB_OFFSET_Z), 0);
 
-      if (indirect) {
+      if (indirect && info->indirect.count == 1) {
+         /* For multi indirect dispatch, the job size parameters will be
+          * loaded inside the loop */
          struct cs_index indirect_buffer = cs_scratch_reg64(b, 0);
          struct cs_index scratch = cs_scratch_reg64(b, 2);
          cs_move64_to(b, indirect_buffer, info->indirect.buffer_dev_addr);
@@ -315,7 +317,52 @@ panvk_per_arch(cmd_dispatch_shader)(
 
    panvk_cond_render(cmdbuf, b)
    {
-      if (indirect) {
+      if (indirect && info->indirect.count > 1) {
+         struct cs_index indirect_buffer = cs_scratch_reg64(b, 0);
+         struct cs_index count_addr = cs_scratch_reg64(b, 2);
+         struct cs_index count = cs_scratch_reg32(b, 4);
+         struct cs_index max_count = cs_scratch_reg32(b, 5);
+         struct cs_index scratch = cs_scratch_reg64(b, 6);
+         struct cs_index trace_scratch = cs_scratch_reg_tuple(b, 6, 4);
+
+         if (info->indirect.count_buffer_dev_addr) {
+            cs_move64_to(b, count_addr, info->indirect.count_buffer_dev_addr);
+            cs_load32_to(b, count, count_addr, 0);
+            cs_move32_to(b, max_count, info->indirect.count);
+            cs_umin32(b, count, count, max_count);
+         } else {
+            cs_move32_to(b, count, info->indirect.count);
+         }
+
+         cs_move64_to(b, indirect_buffer, info->indirect.buffer_dev_addr);
+
+         cs_while(b, MALI_CS_CONDITION_GREATER, count) {
+            prepare_indirect_job_size(cmdbuf, cs, info, indirect_buffer, scratch);
+
+            unsigned task_axis = MALI_TASK_AXIS_X;
+            cs_trace_run_compute(b, tracing_ctx, trace_scratch, wg_per_task,
+                                 task_axis, cs_shader_res_sel(0, 0, 0, 0));
+
+            cs_add_imm64(b, indirect_buffer, indirect_buffer,
+                         info->indirect.stride);
+
+            if (info->indirect.per_dispatch_fau) {
+               uint32_t fau_stride = cs->fau.total_count * sizeof(uint64_t);
+               cs_add_imm64(b, cs_sr_reg64(b, COMPUTE, FAU_0),
+                            cs_sr_reg64(b, COMPUTE, FAU_0), fau_stride);
+            }
+
+            if (info->indirect.per_dispatch_srt) {
+               uint32_t srt_stride =
+                  panvk_shader_res_table_count(&cmdbuf->state.gfx.vs.desc) *
+                  pan_size(RESOURCE);
+               cs_add_imm64(b, cs_sr_reg64(b, COMPUTE, SRT_0),
+                            cs_sr_reg64(b, COMPUTE, SRT_0), srt_stride);
+            }
+
+            cs_add_imm32(b, count, count, -1);
+         }
+      } else if (indirect) {
          /* Use run_compute with a set task axis instead of
           * run_compute_indirect as run_compute_indirect has been found to
           * cause intermittent hangs. This is safe, as the task increment
@@ -466,6 +513,7 @@ panvk_per_arch(CmdDispatchIndirect)(VkCommandBuffer commandBuffer,
    uint64_t buffer_gpu = panvk_buffer_gpu_ptr(buffer, offset);
    struct panvk_dispatch_info info = {
       .indirect.buffer_dev_addr = buffer_gpu,
+      .indirect.count = 1,
       .barrier = PANVK_CSF_BARRIER_SYNC,
    };
 
