@@ -80,6 +80,17 @@ struct panvk_dispatch_info {
 
    struct {
       uint64_t buffer_dev_addr;
+
+      /* Used to dispatch multiple compute shader jobs, with the dispatch count
+       * optionally loaded from a buffer, similar to vkCmdDrawIndirectCount. */
+      uint32_t stride;
+      uint32_t count;
+      uint64_t count_buffer_dev_addr;
+
+      /* If set, FAUs/SRTs will be treated as an array with a separate entry
+       * for each dispatch */
+      bool per_dispatch_fau;
+      bool per_dispatch_srt;
    } indirect;
 
 #if PAN_ARCH >= 10

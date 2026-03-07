@@ -67,6 +67,11 @@ cmd_dispatch(struct panvk_cmd_buffer *cmdbuf, struct panvk_dispatch_info *info)
       panvk_shader_only_variant(cmdbuf->state.compute.shader);
    VkResult result;
 
+   /* CS multi-dispatch is not supported or used on JM */
+   if (info->indirect.buffer_dev_addr)
+      assert(info->indirect.count == 1 &&
+             info->indirect.count_buffer_dev_addr == 0);
+
    /* If there's no compute shader, we can skip the dispatch. */
    if (!panvk_priv_mem_check_alloc(cs->rsd))
       return;
@@ -244,6 +249,7 @@ panvk_per_arch(CmdDispatchIndirect)(VkCommandBuffer commandBuffer,
    uint64_t buffer_gpu = panvk_buffer_gpu_ptr(buffer, offset);
    struct panvk_dispatch_info info = {
       .indirect.buffer_dev_addr = buffer_gpu,
+      .indirect.count = 1,
    };
    cmd_dispatch(cmdbuf, &info);
 }
