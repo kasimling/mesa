@@ -187,6 +187,46 @@ panvk_per_arch(cmd_dispatch_prepare_tls)(
    return tsd.gpu;
 }
 
+
+/* Load indirect dispatch parameters from indirect buffer and update workgroup
+ * count registers and sysvals */
+static void
+prepare_indirect_job_size(
+   struct panvk_cmd_buffer *cmdbuf, const struct panvk_shader_variant *cs,
+   const struct panvk_dispatch_info *info, struct cs_index indirect_buffer,
+   struct cs_index scratch)
+{
+   struct cs_builder *b = panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_COMPUTE);
+
+   struct cs_index faus = scratch;
+
+   cs_load_to(b, cs_sr_reg_tuple(b, COMPUTE, JOB_SIZE_X, 3), indirect_buffer,
+              BITFIELD_MASK(3), 0);
+   /* Determine raw FAU pointer by removing the count tag */
+   cs_add_imm64(b, faus, cs_sr_reg64(b, COMPUTE, FAU_0),
+                -((uint64_t) cs->fau.total_count << 56));
+
+   if (shader_uses_sysval(cs, compute, num_work_groups.x)) {
+      cs_store32(b, cs_sr_reg32(b, COMPUTE, JOB_SIZE_X), faus,
+                 shader_remapped_sysval_offset(
+                    cs, sysval_offset(compute, num_work_groups.x)));
+   }
+
+   if (shader_uses_sysval(cs, compute, num_work_groups.y)) {
+      cs_store32(b, cs_sr_reg32(b, COMPUTE, JOB_SIZE_Y), faus,
+                 shader_remapped_sysval_offset(
+                    cs, sysval_offset(compute, num_work_groups.y)));
+   }
+
+   if (shader_uses_sysval(cs, compute, num_work_groups.z)) {
+      cs_store32(b, cs_sr_reg32(b, COMPUTE, JOB_SIZE_Z), faus,
+                 shader_remapped_sysval_offset(
+                    cs, sysval_offset(compute, num_work_groups.z)));
+   }
+
+   cs_flush_stores(b);
+}
+
 void
 panvk_per_arch(cmd_dispatch_shader)(
    struct panvk_cmd_buffer *cmdbuf,
@@ -256,36 +296,10 @@ panvk_per_arch(cmd_dispatch_shader)(
       cs_move32_to(b, cs_sr_reg32(b, COMPUTE, JOB_OFFSET_Z), 0);
 
       if (indirect) {
-         /* Load parameters from indirect buffer and update workgroup count
-          * registers and sysvals */
-         cs_move64_to(b, cs_scratch_reg64(b, 0),
-                      info->indirect.buffer_dev_addr);
-         cs_load_to(b, cs_sr_reg_tuple(b, COMPUTE, JOB_SIZE_X, 3),
-                    cs_scratch_reg64(b, 0), BITFIELD_MASK(3), 0);
-         cs_move64_to(b, cs_scratch_reg64(b, 0), push_uniforms);
-
-         if (shader_uses_sysval(cs, compute, num_work_groups.x)) {
-            cs_store32(b, cs_sr_reg32(b, COMPUTE, JOB_SIZE_X),
-                       cs_scratch_reg64(b, 0),
-                       shader_remapped_sysval_offset(
-                          cs, sysval_offset(compute, num_work_groups.x)));
-         }
-
-         if (shader_uses_sysval(cs, compute, num_work_groups.y)) {
-            cs_store32(b, cs_sr_reg32(b, COMPUTE, JOB_SIZE_Y),
-                       cs_scratch_reg64(b, 0),
-                       shader_remapped_sysval_offset(
-                          cs, sysval_offset(compute, num_work_groups.y)));
-         }
-
-         if (shader_uses_sysval(cs, compute, num_work_groups.z)) {
-            cs_store32(b, cs_sr_reg32(b, COMPUTE, JOB_SIZE_Z),
-                       cs_scratch_reg64(b, 0),
-                       shader_remapped_sysval_offset(
-                          cs, sysval_offset(compute, num_work_groups.z)));
-         }
-
-         cs_flush_stores(b);
+         struct cs_index indirect_buffer = cs_scratch_reg64(b, 0);
+         struct cs_index scratch = cs_scratch_reg64(b, 2);
+         cs_move64_to(b, indirect_buffer, info->indirect.buffer_dev_addr);
+         prepare_indirect_job_size(cmdbuf, cs, info, indirect_buffer, scratch);
       } else {
          cs_move32_to(b, cs_sr_reg32(b, COMPUTE, JOB_SIZE_X),
                       info->direct.wg_count.x);
