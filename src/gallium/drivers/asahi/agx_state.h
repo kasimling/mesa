@@ -129,6 +129,10 @@ struct PACKED agx_draw_uniforms {
    /* Address of geometry param buffer if geometry shaders are used, else 0 */
    uint64_t geometry_params;
 
+   /* Address of per-drawgeometry param buffer if geometry shaders are used,
+    * else 0 */
+   uint64_t geometry_draw_params;
+
    /* Address of polygon stipple mask if used */
    uint64_t polygon_stipple;
 
@@ -447,7 +451,7 @@ struct agx_batch {
    struct util_dynarray timestamps;
 
    /* Actual pointer in a uniform */
-   struct agx_bo *geom_params_bo, *geom_index_bo;
+   struct agx_bo *geom_params_bo, *geom_draw_params_bo, *geom_index_bo;
    uint64_t geom_index;
 
    /* Whether each stage uses scratch */

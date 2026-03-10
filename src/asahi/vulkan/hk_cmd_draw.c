@@ -1130,7 +1130,7 @@ hk_rast_prim(struct hk_cmd_buffer *cmd)
    }
 }
 
-static uint64_t
+static void
 hk_upload_geometry_params(struct hk_cmd_buffer *cmd, struct agx_draw draw)
 {
    struct hk_device *dev = hk_cmd_buffer_device(cmd);
@@ -1152,7 +1152,10 @@ hk_upload_geometry_params(struct hk_cmd_buffer *cmd, struct agx_draw draw)
    const uint32_t wg_size[3] = {64, 1, 1};
 
    struct poly_geometry_params params;
-   poly_geometry_params_init(&params, mode, wg_size);
+   poly_geometry_params_init(&params, mode);
+
+   struct poly_geometry_draw_params draw_params;
+   poly_geometry_params_init_draw(&draw_params, wg_size);
 
    params.flat_outputs = fs->info.fs.interp.flat;
 
@@ -1213,22 +1216,25 @@ hk_upload_geometry_params(struct hk_cmd_buffer *cmd, struct agx_draw draw)
             poly_gs_rast_vertices(gsi->shape, gsi->max_indices, 1, 0);
       }
    } else {
-      poly_geometry_params_set_draw(&params, mode, gsi->shape, gsi->max_indices,
-                                    draw.b.count[0], draw.b.count[1]);
+      poly_geometry_params_set_draw(&draw_params, mode, gsi->shape,
+                                    gsi->max_indices, draw.b.count[0],
+                                    draw.b.count[1]);
+      poly_geometry_params_set_single_draw(&params, &draw_params);
 
-      unsigned size = params.input_primitives * params.count_buffer_stride;
+      unsigned size = params.total_input_primitives *
+                      params.count_buffer_stride;
       if (count->info.gs.prefix_sum && size) {
          params.count_buffer = hk_pool_alloc(cmd, size, 4).gpu;
       }
 
-      cmd->geom_index_count = params.draw.index_count;
-      cmd->geom_instance_count = params.draw.instance_count;
+      cmd->geom_index_count = draw_params.draw.index_count;
+      cmd->geom_instance_count = draw_params.draw.instance_count;
 
       if (gsi->shape == POLY_GS_SHAPE_DYNAMIC_INDEXED) {
-         params.output_index_buffer =
+         draw_params.output_index_buffer =
             hk_pool_alloc(cmd, cmd->geom_index_count * 4, 4).gpu;
 
-         cmd->geom_index_buffer = params.output_index_buffer;
+         cmd->geom_index_buffer = draw_params.output_index_buffer;
       }
    }
 
@@ -1238,7 +1244,11 @@ hk_upload_geometry_params(struct hk_cmd_buffer *cmd, struct agx_draw draw)
    }
 
    desc->root_dirty = true;
-   return hk_pool_upload(cmd, &params, sizeof(params), 8);
+
+   gfx->descriptors.root.draw.geometry_params =
+      hk_pool_upload(cmd, &params, sizeof(params), 8);
+   gfx->descriptors.root.draw.geometry_draw_params =
+      hk_pool_upload(cmd, &draw_params, sizeof(draw_params), 8);
 }
 
 static void
@@ -1463,6 +1473,7 @@ hk_launch_gs_prerast(struct hk_cmd_buffer *cmd, struct hk_cs *cs,
 
    uint64_t vertex_params = desc->root.draw.vertex_params;
    uint64_t geometry_params = desc->root.draw.geometry_params;
+   uint64_t geometry_draw_params = desc->root.draw.geometry_draw_params;
    unsigned count_words = count->info.gs.count_words;
    struct agx_workgroup wg = agx_workgroup(64, 1, 1);
 
@@ -1507,7 +1518,8 @@ hk_launch_gs_prerast(struct hk_cmd_buffer *cmd, struct hk_cs *cs,
          vertex_params + offsetof(struct poly_vertex_params, grid));
 
       grid_gs = agx_grid_indirect_local(
-         geometry_params + offsetof(struct poly_geometry_params, grid));
+         geometry_draw_params +
+         offsetof(struct poly_geometry_draw_params, grid));
    } else {
       grid_vs = grid_gs = draw.b;
       grid_gs.count[0] = u_decomposed_prims_for_vertices(mode, draw.b.count[0]);
@@ -1563,7 +1575,8 @@ hk_launch_gs_prerast(struct hk_cmd_buffer *cmd, struct hk_cs *cs,
 
       if (agx_is_indirect(draw.b)) {
          return agx_draw_indexed_indirect(
-            geometry_params + offsetof(struct poly_geometry_params, draw),
+            geometry_draw_params +
+            offsetof(struct poly_geometry_draw_params, draw),
             cmd->geom_index_buffer, cmd->geom_index_count, index_size, true);
       } else {
          return agx_draw_indexed(cmd->geom_index_count,
@@ -1573,8 +1586,9 @@ hk_launch_gs_prerast(struct hk_cmd_buffer *cmd, struct hk_cs *cs,
       }
    } else {
       if (agx_is_indirect(draw.b)) {
-         return agx_draw_indirect(geometry_params +
-                                  offsetof(struct poly_geometry_params, draw));
+         return agx_draw_indirect(
+            geometry_draw_params +
+            offsetof(struct poly_geometry_draw_params, draw));
       } else {
          return (struct agx_draw){
             .b = agx_3d(cmd->geom_index_count, cmd->geom_instance_count, 1),
@@ -3071,8 +3085,7 @@ hk_flush_dynamic_state(struct hk_cmd_buffer *cmd, struct hk_cs *cs,
    }
 
    if (gfx->shaders[MESA_SHADER_GEOMETRY]) {
-      gfx->descriptors.root.draw.geometry_params =
-         hk_upload_geometry_params(cmd, draw);
+      hk_upload_geometry_params(cmd, draw);
 
       gfx->descriptors.root_dirty = true;
    }

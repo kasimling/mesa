@@ -261,9 +261,6 @@ struct poly_geometry_params {
    /* Pointers to transform feedback buffer offsets in bytes */
    DEVICE(uint) xfb_offs_ptrs[POLY_MAX_SO_BUFFERS];
 
-   /* Output index buffer, allocated by pre-GS. */
-   DEVICE(uint) output_index_buffer;
-
    /* Address of transform feedback buffer in general, supplied by the CPU. */
    DEVICE(uchar) xfb_base_original[POLY_MAX_SO_BUFFERS];
 
@@ -281,6 +278,27 @@ struct poly_geometry_params {
     * the pre-GS program.
     */
    uint32_t xfb_verts[POLY_MAX_VERTEX_STREAMS];
+
+   /* Number of bytes output by the GS count shader per input primitive (may be
+    * 0), written by CPU and consumed by indirect draw setup shader for
+    * allocating counts.
+    */
+   uint32_t count_buffer_stride;
+
+   /* Dynamic input topology. Must be compatible with the geometry shader's
+    * layout() declared input class.
+    */
+   uint32_t input_topology;
+
+   /* Total number of input primitives across all instances in all draws */
+   uint32_t total_input_primitives;
+} PACKED;
+static_assert(sizeof(struct poly_geometry_params) == 65 * 4,
+              "struct poly_geometry_params must be 65 words");
+
+struct poly_geometry_draw_params {
+   /* Output index buffer, allocated by pre-GS. */
+   DEVICE(uint) output_index_buffer;
 
    /* Within an indirect GS draw, the grids used to dispatch the GS written
     * out by the GS indirect setup kernel or the CPU for a direct draw. This is
@@ -303,27 +321,24 @@ struct poly_geometry_params {
     * efficiently.
     */
    uint32_t primitives_log2;
-
-   /* Number of bytes output by the GS count shader per input primitive (may be
-    * 0), written by CPU and consumed by indirect draw setup shader for
-    * allocating counts.
-    */
-   uint32_t count_buffer_stride;
-
-   /* Dynamic input topology. Must be compatible with the geometry shader's
-    * layout() declared input class.
-    */
-   uint32_t input_topology;
 } PACKED;
-static_assert(sizeof(struct poly_geometry_params) == 79 * 4,
-              "struct poly_geometry_params must be 79 words");
+static_assert(sizeof(struct poly_geometry_draw_params) == 15 * 4,
+              "struct poly_geometry_draw_params must be 16 words");
 
 static inline void
 poly_geometry_params_init(struct poly_geometry_params *p,
-                          enum mesa_prim prim, const uint32_t wg_size[3])
+                          enum mesa_prim prim)
 {
    *p = (struct poly_geometry_params) {
       .input_topology = prim,
+   };
+}
+
+static inline void
+poly_geometry_params_init_draw(struct poly_geometry_draw_params *dp,
+                               const uint32_t wg_size[3])
+{
+   *dp = (struct poly_geometry_draw_params) {
       .grid = {
          0, 0, 1, /* x/y are set by poly_geometry_params_set_draw() */
          wg_size[0], wg_size[1], wg_size[2],
@@ -332,7 +347,7 @@ poly_geometry_params_init(struct poly_geometry_params *p,
 }
 
 static inline void
-poly_geometry_params_set_draw(struct poly_geometry_params *p,
+poly_geometry_params_set_draw(struct poly_geometry_draw_params *dp,
                               enum mesa_prim prim,
                               enum poly_gs_shape shape, uint32_t max_indices,
                               uint32_t vertex_count, uint32_t instance_count)
@@ -342,16 +357,23 @@ poly_geometry_params_set_draw(struct poly_geometry_params *p,
       u_decomposed_prims_for_vertices(prim, vertex_count);
 
    /* Invoke GS as (primitives, instances) */
-   p->grid[0] = prim_per_instance;
-   p->grid[1] = instance_count;
+   dp->grid[0] = prim_per_instance;
+   dp->grid[1] = instance_count;
 
-   p->input_primitives = prim_per_instance * instance_count;
-   p->primitives_log2 = util_logbase2_ceil(prim_per_instance);
+   dp->input_primitives = prim_per_instance * instance_count;
+   dp->primitives_log2 = util_logbase2_ceil(prim_per_instance);
 
-   p->draw.index_count = poly_gs_rast_vertices(
+   dp->draw.index_count = poly_gs_rast_vertices(
       shape, max_indices, prim_per_instance, instance_count);
-   p->draw.instance_count = poly_gs_rast_instances(
+   dp->draw.instance_count = poly_gs_rast_instances(
       shape, max_indices, prim_per_instance, instance_count);
+}
+
+static inline void
+poly_geometry_params_set_single_draw(struct poly_geometry_params *p,
+                                     struct poly_geometry_draw_params *dp)
+{
+   p->total_input_primitives = dp->input_primitives;
 }
 
 /* TCS shared memory layout:
@@ -603,6 +625,7 @@ static inline void
 poly_gs_setup_indirect(uint64_t index_buffer, constant uint *draw,
                        global struct poly_vertex_params *vp /* output */,
                        global struct poly_geometry_params *p /* output */,
+                       global struct poly_geometry_draw_params *dp /* output */,
                        global struct poly_heap *heap,
                        uint64_t vs_outputs /* Vertex (TES) output mask */,
                        uint32_t index_size_B /* 0 if no index bffer */,
@@ -616,8 +639,9 @@ poly_gs_setup_indirect(uint64_t index_buffer, constant uint *draw,
    uint instance_count = draw[1];
 
    poly_vertex_params_set_draw(vp, vertex_count, instance_count);
-   poly_geometry_params_set_draw(p, prim, shape, max_indices,
+   poly_geometry_params_set_draw(dp, prim, shape, max_indices,
                                  vertex_count, instance_count);
+   poly_geometry_params_set_single_draw(p, dp);
 
    /* If indexing is enabled, the third word is the offset into the index buffer
     * in elements. Apply that offset now that we have it. For a hardware
@@ -638,7 +662,7 @@ poly_gs_setup_indirect(uint64_t index_buffer, constant uint *draw,
 
    if (is_prefix_summing) {
       p->count_buffer = poly_heap_alloc(
-         heap, p->input_primitives * p->count_buffer_stride);
+         heap, dp->input_primitives * p->count_buffer_stride);
    }
 
    vp->output_buffer = (uintptr_t)poly_heap_alloc(heap, vertex_buffer_size);
@@ -647,9 +671,9 @@ poly_gs_setup_indirect(uint64_t index_buffer, constant uint *draw,
 
    if (shape == POLY_GS_SHAPE_DYNAMIC_INDEXED) {
       const uint32_t index_offset =
-         poly_heap_alloc_offs(heap, p->draw.index_count * 4);
-      p->draw.first_index = index_offset / 4;
-      p->output_index_buffer = (global uint *)(heap->base + index_offset);
+         poly_heap_alloc_offs(heap, dp->draw.index_count * 4);
+      dp->draw.first_index = index_offset / 4;
+      dp->output_index_buffer = (global uint *)(heap->base + index_offset);
    }
 }
 

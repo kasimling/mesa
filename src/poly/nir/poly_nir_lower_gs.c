@@ -204,6 +204,23 @@ load_geometry_param_offset(nir_builder *b, uint32_t offset, uint8_t bytes)
       b, offsetof(struct poly_geometry_params, field),                         \
       sizeof(((struct poly_geometry_params *)0)->field))
 
+/* Helpers for loading from the geometry state buffer */
+static nir_def *
+load_geometry_draw_param_offset(nir_builder *b, uint32_t offset, uint8_t bytes)
+{
+   nir_def *base = nir_load_geometry_draw_param_buffer_poly(b);
+   nir_def *addr = nir_iadd_imm(b, base, offset);
+
+   assert((offset % bytes) == 0 && "must be naturally aligned");
+
+   return nir_load_global_constant(b, 1, bytes * 8, addr);
+}
+
+#define load_geometry_draw_param(b, field)                                     \
+   load_geometry_draw_param_offset(                                            \
+      b, offsetof(struct poly_geometry_draw_params, field),                    \
+      sizeof(((struct poly_geometry_draw_params *)0)->field))
+
 /* Helpers for lowering I/O to variables */
 struct lower_output_to_var_state {
    nir_variable *outputs[NUM_TOTAL_VARYING_SLOTS];
@@ -266,7 +283,7 @@ vertex_id_for_topology_class(nir_builder *b, nir_def *vert, enum mesa_prim cls)
 {
    nir_def *prim = nir_load_primitive_id(b);
    nir_def *flatshade_first = nir_ieq_imm(b, nir_load_provoking_last(b), 0);
-   nir_def *nr = load_geometry_param(b, grid[0]);
+   nir_def *nr = load_geometry_draw_param(b, grid[0]);
    nir_def *topology = nir_load_input_topology_poly(b);
 
    switch (cls) {
@@ -352,7 +369,7 @@ static nir_def *
 calc_unrolled_id(nir_builder *b)
 {
    return nir_iadd(
-      b, nir_imul(b, load_instance_id(b), load_geometry_param(b, grid[0])),
+      b, nir_imul(b, load_instance_id(b), load_geometry_draw_param(b, grid[0])),
       load_primitive_id(b));
 }
 
@@ -376,7 +393,7 @@ calc_unrolled_index_id(nir_builder *b)
 {
    /* We know this is a dynamic topology and hence indexed */
    unsigned vertex_stride = output_vertex_id_pot_stride(b->shader);
-   nir_def *primitives_log2 = load_geometry_param(b, primitives_log2);
+   nir_def *primitives_log2 = load_geometry_draw_param(b, primitives_log2);
 
    nir_def *instance = nir_ishl(b, load_instance_id(b), primitives_log2);
    nir_def *prim = nir_iadd(b, instance, load_primitive_id(b));
@@ -679,7 +696,7 @@ create_gs_rast_shader(const nir_shader *gs, const struct lower_gs_state *state)
       unsigned stride = output_vertex_id_pot_stride(gs);
 
       nir_def *unrolled = nir_udiv_imm(b, raw_vertex_id, stride);
-      nir_def *primitives_log2 = load_geometry_param(b, primitives_log2);
+      nir_def *primitives_log2 = load_geometry_draw_param(b, primitives_log2);
       nir_def *bit = nir_ishl(b, nir_imm_int(b, 1), primitives_log2);
 
       rs.output_id = nir_umod_imm(b, raw_vertex_id, stride);
@@ -690,7 +707,7 @@ create_gs_rast_shader(const nir_shader *gs, const struct lower_gs_state *state)
 
    case POLY_GS_SHAPE_STATIC_INDEXED:
    case POLY_GS_SHAPE_STATIC_PER_PRIM: {
-      nir_def *stride = load_geometry_param(b, grid[0]);
+      nir_def *stride = load_geometry_draw_param(b, grid[0]);
 
       rs.output_id = raw_vertex_id;
       rs.instance_id = nir_udiv(b, rs.raw_instance_id, stride);
@@ -745,7 +762,7 @@ create_gs_rast_shader(const nir_shader *gs, const struct lower_gs_state *state)
       struct nir_xfb_info *xfb = gs->xfb_info;
 
       nir_def *unrolled = nir_iadd(
-         b, nir_imul(b, rs.instance_id, load_geometry_param(b, grid[0])),
+         b, nir_imul(b, rs.instance_id, load_geometry_draw_param(b, grid[0])),
          rs.primitive_id);
 
       nir_def *n = nir_imm_int(b, n_);
@@ -857,7 +874,7 @@ lower_gs_instr(nir_builder *b, nir_intrinsic_instr *intr, void *state_)
       /* All streams are merged, just pick a single instruction */
       if (nir_intrinsic_stream_id(intr) == 0) {
          poly_pad_index_gs(
-            b, load_geometry_param(b, output_index_buffer),
+            b, load_geometry_draw_param(b, output_index_buffer),
             nir_imul_imm(b, calc_unrolled_id(b), state->info->max_indices),
             intr->src[1].ssa, nir_imm_int(b, state->info->max_indices));
       }
@@ -870,7 +887,7 @@ lower_gs_instr(nir_builder *b, nir_intrinsic_instr *intr, void *state_)
          break;
 
       poly_write_strip(
-         b, load_geometry_param(b, output_index_buffer),
+         b, load_geometry_draw_param(b, output_index_buffer),
          nir_imul_imm(b, calc_unrolled_id(b), state->info->max_indices),
          intr->src[0].ssa,
          nir_iadd(b, calc_unrolled_index_id(b), intr->src[1].ssa),

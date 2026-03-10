@@ -106,6 +106,7 @@ libagx_gs_setup_indirect(
    uint64_t index_buffer, constant uint *draw,
    global struct poly_vertex_params *vp /* output */,
    global struct poly_geometry_params *p /* output */,
+   global struct poly_geometry_draw_params *dp /* output */,
    global struct poly_heap *heap,
    uint64_t vs_outputs /* Vertex (TES) output mask */,
    uint32_t index_size_B /* 0 if no index bffer */,
@@ -113,7 +114,7 @@ libagx_gs_setup_indirect(
    uint32_t prim /* Input primitive type, enum mesa_prim */,
    int is_prefix_summing, uint max_indices, enum poly_gs_shape shape)
 {
-   poly_gs_setup_indirect(index_buffer, draw, vp, p, heap,
+   poly_gs_setup_indirect(index_buffer, draw, vp, p, dp, heap,
                           vs_outputs, index_size_B, index_buffer_range_el, prim,
                           is_prefix_summing, max_indices, shape);
 }
@@ -122,7 +123,7 @@ KERNEL(1024)
 libagx_prefix_sum_geom(constant struct poly_geometry_params *p)
 {
    local uint scratch[32];
-   poly_prefix_sum(scratch, p->count_buffer, p->input_primitives,
+   poly_prefix_sum(scratch, p->count_buffer, p->total_input_primitives,
                    p->count_buffer_stride / 4, cl_group_id.x, 1024);
 }
 

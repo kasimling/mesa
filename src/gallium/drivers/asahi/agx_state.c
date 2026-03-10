@@ -3904,12 +3904,13 @@ agx_batch_heap(struct agx_batch *batch)
    return batch->heap;
 }
 
-static uint64_t
-agx_batch_geometry_params(struct agx_batch *batch, uint64_t input_index_buffer,
-                          size_t index_buffer_size_B,
-                          const struct pipe_draw_info *info,
-                          const struct pipe_draw_start_count_bias *draw,
-                          const struct pipe_draw_indirect_info *indirect)
+static void
+agx_batch_upload_geometry_params(struct agx_batch *batch,
+                                 uint64_t input_index_buffer,
+                                 size_t index_buffer_size_B,
+                                 const struct pipe_draw_info *info,
+                                 const struct pipe_draw_start_count_bias *draw,
+                                 const struct pipe_draw_indirect_info *indirect)
 {
    const uint32_t wg_size[3] = {64, 1, 1};
 
@@ -3923,7 +3924,10 @@ agx_batch_geometry_params(struct agx_batch *batch, uint64_t input_index_buffer,
    }
 
    struct poly_geometry_params params;
-   poly_geometry_params_init(&params, info->mode, wg_size);
+   poly_geometry_params_init(&params, info->mode);
+
+   struct poly_geometry_draw_params draw_params;
+   poly_geometry_params_init_draw(&draw_params, wg_size);
 
    params.flat_outputs =
       batch->ctx->stage[MESA_SHADER_FRAGMENT].shader->info.inputs_flat_shaded;
@@ -3992,13 +3996,15 @@ agx_batch_geometry_params(struct agx_batch *batch, uint64_t input_index_buffer,
       poly_vertex_params_set_draw(&vp, draw->count, info->instance_count);
 
       struct poly_gs_info *gsi = &batch->ctx->gs->gs;
-      poly_geometry_params_set_draw(&params, info->mode, gsi->shape,
+      poly_geometry_params_set_draw(&draw_params, info->mode, gsi->shape,
                                     gsi->max_indices, draw->count,
                                     info->instance_count);
+      poly_geometry_params_set_single_draw(&params, &draw_params);
 
       unsigned vb_size = poly_tcs_in_size(draw->count * info->instance_count,
                                           batch->uniforms.vertex_outputs);
-      unsigned size = params.input_primitives * params.count_buffer_stride;
+      unsigned size = params.total_input_primitives *
+                      params.count_buffer_stride;
 
       if (size && prefix_sum) {
          params.count_buffer =
@@ -4011,21 +4017,27 @@ agx_batch_geometry_params(struct agx_batch *batch, uint64_t input_index_buffer,
       }
 
       if (gsi->shape == POLY_GS_SHAPE_DYNAMIC_INDEXED) {
-         unsigned idx_size = params.input_primitives * gsi->max_indices;
+         unsigned idx_size = params.total_input_primitives * gsi->max_indices;
 
-         params.output_index_buffer =
+         draw_params.output_index_buffer =
             agx_pool_alloc_aligned_with_bo(&batch->pool, idx_size * 4, 4,
                                            &batch->geom_index_bo)
                .gpu;
-         batch->geom_index = params.output_index_buffer;
+         batch->geom_index = draw_params.output_index_buffer;
       }
    }
 
    batch->uniforms.vertex_params =
       agx_pool_upload_aligned(&batch->pool, &vp, sizeof(vp), 8);
 
-   return agx_pool_upload_aligned_with_bo(&batch->pool, &params, sizeof(params),
-                                          8, &batch->geom_params_bo);
+   batch->uniforms.geometry_params =
+      agx_pool_upload_aligned_with_bo(&batch->pool, &params, sizeof(params), 8,
+                                      &batch->geom_params_bo);
+
+   batch->uniforms.geometry_draw_params =
+      agx_pool_upload_aligned_with_bo(&batch->pool, &draw_params,
+                                      sizeof(draw_params), 8,
+                                      &batch->geom_draw_params_bo);
 }
 
 static uint64_t
@@ -4072,6 +4084,7 @@ agx_launch_gs_prerast(struct agx_batch *batch,
 
    uint64_t vp = batch->uniforms.vertex_params;
    uint64_t gp = batch->uniforms.geometry_params;
+   uint64_t gdp = batch->uniforms.geometry_draw_params;
    struct agx_grid grid_vs, grid_gs;
    struct agx_workgroup wg = agx_workgroup(64, 1, 1);
 
@@ -4091,6 +4104,7 @@ agx_launch_gs_prerast(struct agx_batch *batch,
          .draw = agx_indirect_buffer_ptr(batch, indirect),
          .vp = batch->uniforms.vertex_params,
          .p = batch->uniforms.geometry_params,
+         .dp = batch->uniforms.geometry_draw_params,
          .heap = agx_batch_heap(batch),
          .vs_outputs = batch->uniforms.vertex_outputs,
          .index_size_B = info->index_size,
@@ -4106,7 +4120,7 @@ agx_launch_gs_prerast(struct agx_batch *batch,
          vp + offsetof(struct poly_vertex_params, grid));
 
       grid_gs = agx_grid_indirect_local(
-         gp + offsetof(struct poly_geometry_params, grid));
+         gdp + offsetof(struct poly_geometry_draw_params, grid));
    } else {
       grid_vs = agx_3d(draws->count, info->instance_count, 1);
 
@@ -5004,8 +5018,8 @@ agx_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
    agx_update_gs(ctx, info, indirect);
 
    if (ctx->gs) {
-      batch->uniforms.geometry_params =
-         agx_batch_geometry_params(batch, ib, ib_extent, info, draws, indirect);
+      agx_batch_upload_geometry_params(batch, ib, ib_extent, info, draws,
+                                       indirect);
 
       agx_batch_add_bo(batch, ctx->gs->bo);
       agx_batch_add_bo(batch, ctx->gs->gs_copy->bo);
@@ -5102,7 +5116,7 @@ agx_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
    struct pipe_draw_start_count_bias draw_gs;
 
    /* Wrap the pool allocation in a fake resource for meta-Gallium use */
-   struct agx_resource indirect_rsrc = {.bo = batch->geom_params_bo};
+   struct agx_resource indirect_rsrc = {.bo = batch->geom_draw_params_bo};
    struct agx_resource index_rsrc = {};
 
    if (ctx->gs) {
@@ -5124,9 +5138,9 @@ agx_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
          indirect_gs = (struct pipe_draw_indirect_info){
             .draw_count = 1,
             .buffer = &indirect_rsrc.base,
-            .offset = batch->uniforms.geometry_params -
+            .offset = batch->uniforms.geometry_draw_params -
                       indirect_rsrc.bo->va->addr +
-                      offsetof(struct poly_geometry_params, draw),
+                      offsetof(struct poly_geometry_draw_params, draw),
          };
 
          indirect = &indirect_gs;
