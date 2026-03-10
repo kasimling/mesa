@@ -257,7 +257,7 @@ poly_input_vertices(constant struct poly_vertex_params *p)
 
 global uint *
 poly_load_xfb_count_address(constant struct poly_geometry_params *p, int index,
-                            int count_words, uint unrolled_id)
+                             int count_words, uint unrolled_id)
 {
    return &p->count_buffer[(unrolled_id * count_words) + index];
 }
@@ -302,7 +302,7 @@ poly_pre_gs(global struct poly_geometry_params *p, uint streams,
    unsigned count_words = !!(count_index[0] >= 0) + !!(count_index[1] >= 0) +
                           !!(count_index[2] >= 0) + !!(count_index[3] >= 0);
    bool prefix_sum = count_words && buffers_written;
-   uint unrolled_in_prims = p->input_primitives;
+   uint unrolled_in_prims = p->total_input_primitives;
 
    /* Determine the number of primitives generated in each stream */
    uint4 in_prims = 0;
