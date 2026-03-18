@@ -1365,6 +1365,8 @@ panvk_compile_shader(struct panvk_device *dev,
       for (enum panvk_vs_variant v = 0; v <= last_variant; v++) {
          struct panvk_shader_variant *variant = &shader->variants[v];
 
+         struct pan_compile_inputs variant_inputs = inputs;
+
          /* Each variant gets its own NIR. To save an extra clone, we use the
           * original NIR for the last stage.
           */
@@ -1377,9 +1379,9 @@ panvk_compile_shader(struct panvk_device *dev,
                          state, &shader->desc_info, false);
 
 #if PAN_ARCH >= 10
-         if (inputs.view_mask) {
+         if (variant_inputs.view_mask) {
             nir_lower_multiview_options options = {
-               .view_mask = inputs.view_mask,
+               .view_mask = variant_inputs.view_mask,
                .allowed_per_view_outputs = ~0
             };
 
@@ -1415,21 +1417,22 @@ panvk_compile_shader(struct panvk_device *dev,
          /* This somehow folds the location for multi-slot nir_load/nir_store */
          NIR_PASS(_, nir, nir_opt_constant_folding);
 
-         inputs.trust_varying_flat_highp_types = true;
+         variant_inputs.trust_varying_flat_highp_types = true;
          struct pan_varying_layout varying_layout;
          if (v == PANVK_VS_VARIANT_HW) {
-            pan_varying_collect_formats(&varying_layout, nir, inputs.gpu_id,
-                                        inputs.trust_varying_flat_highp_types,
+            pan_varying_collect_formats(&varying_layout, nir,
+                                        variant_inputs.gpu_id,
+                                         variant_inputs.trust_varying_flat_highp_types,
                                         true);
             pan_build_varying_layout_compact(&varying_layout, nir,
-                                             inputs.gpu_id);
-            inputs.varying_layout = &varying_layout;
+                                             variant_inputs.gpu_id);
+            variant_inputs.varying_layout = &varying_layout;
          }
 
          variant->own_bin = true;
 
-         result = panvk_compile_nir(dev, nir, info->flags, &inputs, state,
-                                    noperspective_varyings,
+         result = panvk_compile_nir(dev, nir, info->flags, &variant_inputs,
+                                    state, noperspective_varyings,
                                     &shader->desc_info, variant);
 
          /* If we cloned, it's our job to clean up */
