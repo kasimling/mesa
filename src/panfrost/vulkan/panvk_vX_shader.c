@@ -202,15 +202,25 @@ panvk_lower_sysvals(nir_builder *b, nir_instr *instr, void *data)
       val = intr->src[0].ssa;
       break;
 
-   case nir_intrinsic_load_vertex_param_buffer_poly:
+   case nir_intrinsic_load_vertex_param_buffer_poly: {
+      nir_def *draw_id = b->shader->info.stage == MESA_SHADER_COMPUTE ?
+         load_sysval(b, graphics, 32, vs.draw_id) :
+         nir_load_draw_id(b);
       val = load_sysval(b, graphics, bit_size, poly.vertex_params);
+      val = nir_iadd(b, val, nir_i2i64(b, nir_imul_imm(b, draw_id, sizeof(struct poly_vertex_params))));
       break;
+   }
    case nir_intrinsic_load_geometry_param_buffer_poly:
       val = load_sysval(b, graphics, bit_size, poly.geometry_params);
       break;
-   case nir_intrinsic_load_geometry_draw_param_buffer_poly:
+   case nir_intrinsic_load_geometry_draw_param_buffer_poly: {
+      nir_def *draw_id = b->shader->info.stage == MESA_SHADER_COMPUTE ?
+         load_sysval(b, graphics, 32, vs.draw_id) :
+         nir_load_draw_id(b);
       val = load_sysval(b, graphics, bit_size, poly.geometry_draw_params);
+      val = nir_iadd(b, val, nir_i2i64(b, nir_imul_imm(b, draw_id, sizeof(struct poly_geometry_draw_params))));
       break;
+   }
    case nir_intrinsic_load_rasterization_stream:
       val = load_sysval(b, graphics, bit_size, poly.rasterization_stream);
       break;
