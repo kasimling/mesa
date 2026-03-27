@@ -580,7 +580,8 @@ panfrost_create_shader_state(struct pipe_context *pctx,
       pan_varying_collect_formats(varying_layout, nir,
                                   panfrost_device_gpu_id(dev),
                                   false, /* trust_varying_flat_highp_types */
-                                  false /* lower_mediump */);
+                                  false, /* lower_mediump */
+                                  false  /* is_sw_vs */);
       pan_build_varying_layout_compact(varying_layout, nir,
                                        panfrost_device_gpu_id(dev));
    }

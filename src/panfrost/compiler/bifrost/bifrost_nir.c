@@ -907,7 +907,8 @@ bifrost_postprocess_nir(nir_shader *nir,
       pan_varying_collect_formats(&info->varyings.formats,
                                   nir, inputs->gpu_id,
                                   inputs->trust_varying_flat_highp_types,
-                                  false /* lower mediump */);
+                                  false, /* lower mediump */
+                                  false  /* is_sw_vs */);
 
       if (!inputs->is_blend)
          NIR_PASS(_, nir, pan_nir_lower_fs_inputs, inputs->gpu_id,
@@ -944,6 +945,11 @@ bifrost_postprocess_nir(nir_shader *nir,
       NIR_PASS(_, nir, pan_nir_lower_vs_outputs, inputs->gpu_id,
                inputs->varying_layout, info->vs.idvs,
                &info->vs.needs_extended_fifo);
+   } else if (nir->info.stage == MESA_SHADER_COMPUTE) {
+      /* This may be a SW VS, which still has a varying layout */
+      if (inputs->varying_layout)
+         memcpy(&info->varyings.formats, inputs->varying_layout,
+                sizeof(*inputs->varying_layout));
    }
 
    NIR_PASS(_, nir, pan_nir_lower_tex, gpu_id);

@@ -296,7 +296,7 @@ void pan_build_varying_layout_compact(struct pan_varying_layout *layout,
 void pan_varying_collect_formats(struct pan_varying_layout *registry,
                                  nir_shader *nir, uint64_t gpu_id,
                                  bool trust_varying_flat_highp_types,
-                                 bool lower_mediump);
+                                 bool lower_mediump, bool is_sw_vs);
 
 struct pan_shader_varying {
    gl_varying_slot location;

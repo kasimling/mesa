@@ -339,7 +339,7 @@ void
 pan_varying_collect_formats(struct pan_varying_layout *layout, nir_shader *nir,
                             uint64_t gpu_id,
                             bool trust_varying_flat_highp_types,
-                            bool lower_mediump)
+                            bool lower_mediump, bool is_sw_vs)
 {
    assert(nir->info.stage == MESA_SHADER_VERTEX ||
           nir->info.stage == MESA_SHADER_FRAGMENT);
@@ -369,7 +369,10 @@ pan_varying_collect_formats(struct pan_varying_layout *layout, nir_shader *nir,
       assert(count <= ARRAY_SIZE(layout->slots));
       assert(layout->slots[idx].alu_type == nir_type_invalid);
 
-      if (BITFIELD64_BIT(i) & PAN_HARDWARE_VARYING_BITS) {
+      /* For SW VS, we write all the outputs to memory buffers that are loaded
+       * by the GS, and so don't use the HW varying layouts.
+       */
+      if (BITFIELD64_BIT(i) & PAN_HARDWARE_VARYING_BITS && !is_sw_vs) {
          layout->slots[idx] = hw_varying_slot(gpu_arch, nir->info.stage, i);
       } else {
          nir_alu_type type = nir_alu_type_get_base_type(slots[i].type);

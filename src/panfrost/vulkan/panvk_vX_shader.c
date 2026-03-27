@@ -1564,16 +1564,18 @@ panvk_compile_shader(struct panvk_device *dev,
          NIR_PASS(_, nir, nir_opt_constant_folding);
 
          variant_inputs.trust_varying_flat_highp_types = true;
+
+         /* TODO: mediump IO with SW VS and libpoly */
+         bool lower_mediump = v == PANVK_VS_VARIANT_HW;
+
          struct pan_varying_layout varying_layout;
-         if (v == PANVK_VS_VARIANT_HW) {
-            pan_varying_collect_formats(&varying_layout, nir,
-                                        variant_inputs.gpu_id,
-                                         variant_inputs.trust_varying_flat_highp_types,
-                                        true);
-            pan_build_varying_layout_compact(&varying_layout, nir,
-                                             variant_inputs.gpu_id);
-            variant_inputs.varying_layout = &varying_layout;
-         }
+         pan_varying_collect_formats(&varying_layout, nir,
+                                     variant_inputs.gpu_id,
+                                      variant_inputs.trust_varying_flat_highp_types,
+                                     lower_mediump, v == PANVK_VS_VARIANT_SW);
+         pan_build_varying_layout_compact(&varying_layout, nir,
+                                          variant_inputs.gpu_id);
+         variant_inputs.varying_layout = &varying_layout;
 
          if (v == PANVK_VS_VARIANT_SW)
             panvk_nir_lower_compute_vs(nir);
@@ -1653,7 +1655,7 @@ panvk_compile_shader(struct panvk_device *dev,
             pan_varying_collect_formats(&varying_layout, nir,
                                         variant_inputs.gpu_id,
                                         variant_inputs.trust_varying_flat_highp_types,
-                                        true);
+                                        true, false);
             pan_build_varying_layout_compact(&varying_layout, nir,
                                              variant_inputs.gpu_id);
             variant_inputs.varying_layout = &varying_layout;
