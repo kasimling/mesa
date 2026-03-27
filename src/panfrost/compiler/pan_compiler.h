@@ -355,7 +355,8 @@ void pan_build_varying_layout_compact(struct pan_varying_layout *layout,
                                       nir_shader *nir, uint64_t gpu_id);
 
 void pan_varying_collect_formats(struct pan_varying_layout *registry,
-                                 nir_shader *nir, uint64_t gpu_id);
+                                 nir_shader *nir, uint64_t gpu_id,
+                                 bool is_sw_vs);
 
 struct pan_shader_varying {
    gl_varying_slot location;
