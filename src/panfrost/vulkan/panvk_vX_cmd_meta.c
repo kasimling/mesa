@@ -134,11 +134,19 @@ meta_gfx_start(struct panvk_cmd_buffer *cmdbuf,
    save_ctx->dyn_state.vi = cmdbuf->state.gfx.dynamic.vi;
    save_ctx->dyn_state.sl = cmdbuf->state.gfx.dynamic.sl;
    save_ctx->occlusion_query = cmdbuf->state.gfx.occlusion_query;
+#if PAN_ARCH >= 10
+   save_ctx->xfb_active = cmdbuf->state.gfx.xfb.active;
+#endif
 
-   /* Ensure occlusion queries are disabled */
+   /* Ensure occlusion queries and XFB are disabled */
    cmdbuf->state.gfx.occlusion_query.ptr = 0;
    cmdbuf->state.gfx.occlusion_query.mode = MALI_OCCLUSION_MODE_DISABLED;
    gfx_state_set_dirty(cmdbuf, OQ);
+
+#if PAN_ARCH >= 10
+   cmdbuf->state.gfx.xfb.active = false;
+   gfx_state_set_dirty(cmdbuf, XFB);
+#endif
 
    cmdbuf->state.gfx.vk_meta = true;
 #if PAN_ARCH >= 10
@@ -213,6 +221,11 @@ meta_gfx_end(struct panvk_cmd_buffer *cmdbuf,
    cmdbuf->state.gfx.gs.desc.res_table = 0;
    cmdbuf->state.gfx.tes.desc.res_table = 0;
    cmdbuf->state.gfx.tcs.desc.res_table = 0;
+#endif
+
+#if PAN_ARCH >= 10
+   cmdbuf->state.gfx.xfb.active = save_ctx->xfb_active;
+   gfx_state_set_dirty(cmdbuf, XFB);
 #endif
 
    cmdbuf->vk.dynamic_graphics_state = save_ctx->dyn_state.all;

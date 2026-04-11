@@ -78,6 +78,12 @@ struct panvk_cmd_meta_graphics_save_ctx {
    struct panvk_occlusion_query_state occlusion_query;
    bool cond_render_enabled;
    bool cond_render_inherited;
+
+#if PAN_ARCH >= 10
+   /* None of the vk_meta commands use XFB, so we don't need to save/restore
+    * any of the other state */
+   bool xfb_active;
+#endif
 };
 
 void panvk_per_arch(cmd_meta_resolve_attachments)(
