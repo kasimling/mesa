@@ -252,4 +252,8 @@ void pan_dump_resource(struct panfrost_context *ctx,
 void panfrost_blit_no_afbc_legalization(struct pipe_context *pipe,
                                         const struct pipe_blit_info *info);
 
+bool panfrost_resource_wait(struct panfrost_resource *rsrc,
+                            struct panfrost_context *ctx, int64_t timeout_ns,
+                            bool wait_readers);
+
 #endif /* PAN_RESOURCE_H */

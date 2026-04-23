@@ -753,7 +753,7 @@ panfrost_get_query_result(struct pipe_context *pipe, struct pipe_query *q,
    case PIPE_QUERY_OCCLUSION_PREDICATE:
    case PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE:
       panfrost_flush_writer(ctx, rsrc, "Occlusion query");
-      panfrost_bo_wait(rsrc->bo, INT64_MAX, false);
+      panfrost_resource_wait(rsrc, ctx, INT64_MAX, false);
 
       /* Read back the query results */
       uint64_t *result = (uint64_t *)rsrc->bo->ptr.cpu;
@@ -775,7 +775,7 @@ panfrost_get_query_result(struct pipe_context *pipe, struct pipe_query *q,
 
    case PIPE_QUERY_TIMESTAMP: {
       panfrost_flush_writer(ctx, rsrc, "Timestamp query");
-      panfrost_bo_wait(rsrc->bo, INT64_MAX, false);
+      panfrost_resource_wait(rsrc, ctx, INT64_MAX, false);
       uint64_t *timestamp = (uint64_t *)rsrc->bo->ptr.cpu;
 
       vresult->u64 = pan_gpu_time_to_ns(dev, *timestamp);
@@ -791,7 +791,7 @@ panfrost_get_query_result(struct pipe_context *pipe, struct pipe_query *q,
 
    case PIPE_QUERY_TIME_ELAPSED: {
       panfrost_flush_writer(ctx, rsrc, "Time elapsed query");
-      panfrost_bo_wait(rsrc->bo, INT64_MAX, false);
+      panfrost_resource_wait(rsrc, ctx, INT64_MAX, false);
       uint64_t *timestamp = (uint64_t *)rsrc->bo->ptr.cpu;
 
       vresult->u64 = pan_gpu_time_to_ns(dev, timestamp[1] - timestamp[0]);
