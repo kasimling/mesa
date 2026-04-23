@@ -1413,12 +1413,48 @@ panfrost_load_tiled_images(struct panfrost_transfer *transfer,
    }
 }
 
+/* panfrost_resource_wait() only waits on panfrost_resource::bo even though
+ * there might be multiple other BOs attached to the resource.
+ *
+ * Here are some aspects that are worth noting:
+ * - rsrc::{separate_stencil,shadow_image}::bo is implicitly waited on because
+ *   panfrost_batch_{write,read}_rsrc() always record access to these resources
+ *   if they are present, so waiting on one of them is equivalent to waiting
+ *   on all of them
+ * - multiplanar resources should be covered because
+ *   panfrost_batch_{write,read}_rsrc() always record accesses on all planes
+ * - panfrost_resource::afbc::{layout,packed}_bo are not covered. They must
+ *   be waited on manually with a panfrost_bo_wait() call, because we don't
+ *   even track accesses to those a the panfrost_context::bo_access level
+ */
 bool
 panfrost_resource_wait(struct panfrost_resource *rsrc,
-                       UNUSED struct panfrost_context *ctx, int64_t timeout_ns,
+                       struct panfrost_context *ctx, int64_t timeout_ns,
                        bool wait_readers)
 {
-   return panfrost_bo_wait(rsrc->bo, timeout_ns, wait_readers);
+   uint32_t handle = panfrost_bo_handle(rsrc->bo);
+   uint32_t *pending_access;
+
+   if (util_dynarray_num_elements(&ctx->bo_access, uint32_t) <= handle)
+      return true;
+
+   pending_access = util_dynarray_element(&ctx->bo_access, uint32_t, handle);
+
+   uint32_t seqno = *pending_access >> 2;
+   uint32_t access = *pending_access & PAN_BO_ACCESS_RW;
+
+   if (!access || rsrc->bo->seqno != seqno)
+      return true;
+
+   if (!panfrost_bo_wait(rsrc->bo, timeout_ns, wait_readers))
+      return false;
+
+   if (wait_readers)
+      *pending_access &= ~PAN_BO_ACCESS_RW;
+   else
+      *pending_access &= ~PAN_BO_ACCESS_WRITE;
+
+   return true;
 }
 
 #if MESA_DEBUG
