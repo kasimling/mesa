@@ -869,7 +869,9 @@ panvk_get_subqueue_stages(struct panvk_device *dev,
     * before advertising GS/XFB unconditionally, to avoid performance
     * regressions.
     */
-   bool may_compute_vs = dev->vk.enabled_features.geometryShader;
+    bool may_compute_vs =
+       dev->vk.enabled_features.geometryShader ||
+       dev->vk.enabled_features.transformFeedback;
 
    switch (subqueue) {
    case PANVK_SUBQUEUE_VERTEX_TILER:
@@ -878,7 +880,8 @@ panvk_get_subqueue_stages(struct panvk_device *dev,
              VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
              VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
              VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT |
-             VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT;
+             VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT |
+             VK_PIPELINE_STAGE_2_TRANSFORM_FEEDBACK_BIT_EXT;
    case PANVK_SUBQUEUE_FRAGMENT:
       return VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
@@ -892,7 +895,8 @@ panvk_get_subqueue_stages(struct panvk_device *dev,
          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
          VK_PIPELINE_STAGE_2_COPY_BIT |
          VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT |
-         VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT;
+         VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT |
+         VK_PIPELINE_STAGE_2_TRANSFORM_FEEDBACK_BIT_EXT;
       if (may_compute_vs)
          stages |= VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
                    VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT |
