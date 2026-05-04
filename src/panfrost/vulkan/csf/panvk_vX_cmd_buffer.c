@@ -36,6 +36,7 @@
 #include "pan_samples.h"
 
 #include "util/bitscan.h"
+#include "poly/geometry.h"
 #include "vk_descriptor_update_template.h"
 #include "vk_format.h"
 #include "vk_synchronization.h"
@@ -741,6 +742,44 @@ panvk_per_arch(CmdPipelineBarrier2)(VkCommandBuffer commandBuffer,
    }
 }
 
+VkResult
+panvk_per_arch(cmd_init_poly_heap)(struct panvk_cmd_buffer *cmdbuf)
+{
+   struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
+
+   /* The first time poly_heap is used in a primary command buffer, we need to
+    * reset the heap bottom position.
+    *
+    * For secondary command buffers, the heap may already have been
+    * initialized in the primary, so we don't want to reset it again. If not,
+    * it will be initialized in the primary before executing the secondary. */
+   if (cmdbuf->state.uses_poly_heap)
+      return VK_SUCCESS;
+
+   if (cmdbuf->vk.level == VK_COMMAND_BUFFER_LEVEL_SECONDARY) {
+      cmdbuf->state.uses_poly_heap = true;
+      return VK_SUCCESS;
+   }
+
+   VkResult result = panvk_per_arch(device_init_poly_heap)(dev);
+   if (result != VK_SUCCESS)
+      return result;
+
+   struct cs_builder *b = panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_COMPUTE);
+
+   struct cs_index addr = cs_scratch_reg64(b, 0);
+   struct cs_index zero = cs_scratch_reg32(b, 2);
+
+   cs_move64_to(b, addr, dev->poly_heap.state_addr);
+   cs_move32_to(b, zero, 0);
+   cs_store32(b, zero, addr, offsetof(struct poly_heap, bottom));
+   cs_flush_stores(b);
+
+   cmdbuf->state.uses_poly_heap = true;
+
+   return VK_SUCCESS;
+}
+
 static struct cs_buffer
 alloc_cs_buffer(void *cookie)
 {
@@ -1020,6 +1059,14 @@ panvk_per_arch(CmdExecuteCommands)(VkCommandBuffer commandBuffer,
 
    for (uint32_t i = 0; i < commandBufferCount; i++) {
       VK_FROM_HANDLE(panvk_cmd_buffer, secondary, pCommandBuffers[i]);
+
+      if (secondary->state.uses_poly_heap) {
+         VkResult result = panvk_per_arch(cmd_init_poly_heap)(primary);
+         if (result != VK_SUCCESS) {
+            vk_command_buffer_set_error(&primary->vk, result);
+            break;
+         }
+      }
 
       /* make sure the CS context is setup properly
        * to inherit the primary command buffer state
