@@ -197,6 +197,9 @@ panvk_lower_sysvals(nir_builder *b, nir_instr *instr, void *data)
    case nir_intrinsic_load_geometry_param_buffer_poly:
       val = load_sysval(b, graphics, bit_size, poly.geometry_params);
       break;
+   case nir_intrinsic_load_geometry_draw_param_buffer_poly:
+      val = load_sysval(b, graphics, bit_size, poly.geometry_draw_params);
+      break;
    case nir_intrinsic_load_rasterization_stream:
       val = load_sysval(b, graphics, bit_size, poly.rasterization_stream);
       break;

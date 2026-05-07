@@ -825,26 +825,30 @@ prepare_poly(struct panvk_cmd_buffer *cmdbuf,
       prim = u_decomposed_prim(prim);
 
    struct poly_geometry_params *gp = &cmdbuf->state.gfx.poly.gp;
-   poly_geometry_params_init(gp, prim, wg_size);
+   poly_geometry_params_init(gp, prim);
+
+   struct poly_geometry_draw_params *gdp = &cmdbuf->state.gfx.poly.gdp;
+   poly_geometry_params_init_draw(gdp, wg_size);
 
    if (indirect_draw) {
       if (gsi->shape == POLY_GS_SHAPE_DYNAMIC_INDEXED) {
          /* Nothing for us to do here */
       } else {
-         gp->draw.index_count =
+         gdp->draw.index_count =
             poly_gs_rast_vertices(gsi->shape, gsi->max_indices, 1, 0);
       }
    } else {
-      poly_geometry_params_set_draw(gp, prim, gsi->shape, gsi->max_indices,
+      poly_geometry_params_set_draw(gdp, prim, gsi->shape, gsi->max_indices,
                                     draw->vertex.count, draw->instance.count);
+      poly_geometry_params_set_single_draw(gp, gdp);
 
       if (gsi->shape == POLY_GS_SHAPE_DYNAMIC_INDEXED) {
          struct pan_ptr gs_index_buffer = panvk_cmd_alloc_dev_mem(
-            cmdbuf, desc, gp->draw.index_count * 4, 4);
+            cmdbuf, desc, gdp->draw.index_count * 4, 4);
          if (!gs_index_buffer.gpu)
             return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
-         gp->output_index_buffer = gs_index_buffer.gpu;
+         gdp->output_index_buffer = gs_index_buffer.gpu;
       }
    }
    if (gsi->shape == POLY_GS_SHAPE_STATIC_INDEXED) {
@@ -854,7 +858,7 @@ prepare_poly(struct panvk_cmd_buffer *cmdbuf,
          return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
       memcpy(gs_index_buffer.cpu, gsi->topology, gsi->max_indices * 4);
-      gp->output_index_buffer = gs_index_buffer.gpu;
+      gdp->output_index_buffer = gs_index_buffer.gpu;
    }
 
    /* TODO: queries */
@@ -892,7 +896,7 @@ prepare_poly(struct panvk_cmd_buffer *cmdbuf,
       if (!gsi->prefix_sum)
          count_buffer_size = gp->count_buffer_stride;
       else if (!indirect_draw)
-         count_buffer_size = gp->input_primitives * gp->count_buffer_stride;
+         count_buffer_size = gdp->input_primitives * gp->count_buffer_stride;
       /* For prefix summing indirect draws, the buffer is dynamically
        * allocated */
 
@@ -910,6 +914,14 @@ prepare_poly(struct panvk_cmd_buffer *cmdbuf,
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
    cmdbuf->state.gfx.poly.gp_addr = gp_mem.gpu;
+
+   struct pan_ptr gdp_mem =
+      panvk_cmd_upload_dev_mem(cmdbuf, desc, gdp, sizeof(*gdp), 8);
+   if (!gdp_mem.gpu)
+      return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+
+   cmdbuf->state.gfx.poly.gdp_addr = gdp_mem.gpu;
+
 
    return VK_SUCCESS;
 }
@@ -3205,7 +3217,7 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
    assert(!cmdbuf->state.gfx.tes.shader);
    const struct panvk_shader_variant *tes = NULL;
 
-   const struct poly_geometry_params *gp = &cmdbuf->state.gfx.poly.gp;
+   const struct poly_geometry_draw_params *gdp = &cmdbuf->state.gfx.poly.gdp;
    const struct panvk_shader_variant *main = panvk_main_gs_variant(gs);
    const struct panvk_shader_variant *count = panvk_count_gs_variant(gs);
    const struct panvk_shader_variant *pre = panvk_pre_gs_variant(gs);
@@ -3240,6 +3252,7 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
       struct panlib_gs_setup_indirect_byte_count_args setup = {
          .vp = cmdbuf->state.gfx.poly.vp_addr,
          .gp = cmdbuf->state.gfx.poly.gp_addr,
+         .gdp = cmdbuf->state.gfx.poly.gdp_addr,
          .heap = dev->poly_heap.state_addr,
          .byte_count = draw.indirect.buffer_dev_addr,
          .instance_count = draw.instance.count,
@@ -3261,6 +3274,7 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
       struct panlib_gs_setup_indirect_args setup = {
          .vp = cmdbuf->state.gfx.poly.vp_addr,
          .gp = cmdbuf->state.gfx.poly.gp_addr,
+         .gdp = cmdbuf->state.gfx.poly.gdp_addr,
          .heap = dev->poly_heap.state_addr,
          .draw = draw.indirect.buffer_dev_addr,
          .vs_outputs = tes ? tes->info.outputs_written
@@ -3312,16 +3326,16 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
    struct panvk_dispatch_info gs_disp;
    if (is_indirect) {
       gs_disp = (struct panvk_dispatch_info) {
-         .indirect.buffer_dev_addr = cmdbuf->state.gfx.poly.gp_addr +
-            offsetof(struct poly_geometry_params, grid),
+          .indirect.buffer_dev_addr = cmdbuf->state.gfx.poly.gdp_addr +
+             offsetof(struct poly_geometry_draw_params, grid),
       };
    } else {
-      assert(gp->grid[2] == 1);
+      assert(gdp->grid[2] == 1);
       gs_disp = (struct panvk_dispatch_info) {
          .direct.wg_count = {
-            .x = gp->grid[0],
-            .y = gp->grid[1],
-            .z = gp->grid[2],
+            .x = gdp->grid[0],
+            .y = gdp->grid[1],
+            .z = gdp->grid[2],
          },
       };
    };
@@ -3374,20 +3388,20 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
             .index.index_size = poly_gs_index_size(gsi->shape),
             .index.restart_enable = true,
             .indirect.buffer_dev_addr =
-               cmdbuf->state.gfx.poly.gp_addr +
-               offsetof(struct poly_geometry_params, draw),
+               cmdbuf->state.gfx.poly.gdp_addr +
+               offsetof(struct poly_geometry_draw_params, draw),
             .indirect.draw_count = 1,
             .prim = gs->gs.gs_info.mode,
          };
       } else {
          return (struct panvk_draw_info) {
-            .index.buffer_dev_addr = gp->output_index_buffer,
-            .index.buffer_size = gp->draw.index_count * 4,
+            .index.buffer_dev_addr = gdp->output_index_buffer,
+            .index.buffer_size = gdp->draw.index_count * 4,
             .index.index_size = poly_gs_index_size(gsi->shape),
-            .index.offset = gp->draw.first_index,
+            .index.offset = gdp->draw.first_index,
             .index.restart_enable = true,
-            .vertex.count = gp->draw.index_count,
-            .instance.count = gp->draw.instance_count,
+            .vertex.count = gdp->draw.index_count,
+            .instance.count = gdp->draw.instance_count,
             .prim = gs->gs.gs_info.mode,
          };
       }
@@ -3395,16 +3409,16 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
       if (is_indirect) {
          return (struct panvk_draw_info) {
             .indirect.buffer_dev_addr =
-               cmdbuf->state.gfx.poly.gp_addr +
-               offsetof(struct poly_geometry_params, draw),
+               cmdbuf->state.gfx.poly.gdp_addr +
+               offsetof(struct poly_geometry_draw_params, draw),
             .indirect.draw_count = 1,
             .prim = gs->gs.gs_info.mode,
          };
       } else {
          return (struct panvk_draw_info) {
-            .vertex.count = gp->draw.vertex_count,
-            .vertex.base = gp->draw.first_vertex,
-            .instance.count = gp->draw.instance_count,
+            .vertex.count = gdp->draw.vertex_count,
+            .vertex.base = gdp->draw.first_vertex,
+            .instance.count = gdp->draw.instance_count,
             .prim = gs->gs.gs_info.mode,
          };
       }

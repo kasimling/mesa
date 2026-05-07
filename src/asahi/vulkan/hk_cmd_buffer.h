@@ -76,6 +76,9 @@ struct hk_root_descriptor_table {
          /* Address of geometry param buffer if GS is used, else 0 */
          uint64_t geometry_params;
 
+         /* Address of per-draw geometry param buffer if GS is used, else 0 */
+         uint64_t geometry_draw_params;
+
          /* Pipeline statistics queries. This is a base address with flags. */
          uint64_t pipeline_stats;
          VkQueryPipelineStatisticFlags pipeline_stats_flags;

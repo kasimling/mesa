@@ -1513,6 +1513,9 @@ system_value("vertex_param_buffer_poly", 1, bit_sizes=[64])
 # Address of poly_geometry_param for geometry shaders
 system_value("geometry_param_buffer_poly", 1, bit_sizes=[64])
 
+# Address of poly_geometry_draw_param for geometry shader per-draw state
+system_value("geometry_draw_param_buffer_poly", 1, bit_sizes=[64])
+
 # Address of poly_tess_param for tessellation shaders
 system_value("tess_param_buffer_poly", 1, bit_sizes=[64])
 

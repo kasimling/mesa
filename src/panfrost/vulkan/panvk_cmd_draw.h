@@ -205,6 +205,9 @@ struct panvk_cmd_graphics_state {
 
       struct poly_geometry_params gp;
       uint64_t gp_addr;
+
+      struct poly_geometry_draw_params gdp;
+      uint64_t gdp_addr;
    } poly;
 
    struct {

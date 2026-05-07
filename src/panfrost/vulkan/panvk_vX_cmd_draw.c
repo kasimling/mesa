@@ -923,6 +923,8 @@ panvk_per_arch(cmd_prepare_draw_sysvals)(struct panvk_cmd_buffer *cmdbuf,
                    cmdbuf->state.gfx.poly.vp_addr);
     set_gfx_sysval(cmdbuf, dirty_sysvals, poly.geometry_params,
                    cmdbuf->state.gfx.poly.gp_addr);
+    set_gfx_sysval(cmdbuf, dirty_sysvals, poly.geometry_draw_params,
+                   cmdbuf->state.gfx.poly.gdp_addr);
 
    if (dyn_gfx_state_dirty(cmdbuf, IA_PRIMITIVE_TOPOLOGY) ||
        dyn_gfx_state_dirty(cmdbuf, RS_PROVOKING_VERTEX)) {
