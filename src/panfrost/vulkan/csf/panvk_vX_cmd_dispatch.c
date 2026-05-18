@@ -46,7 +46,7 @@ void panvk_per_arch(cmd_signal_barrier)(
       cs_load64_to(b, sync_addr, cs_subqueue_ctx_reg(b),
                    offsetof(struct panvk_cs_subqueue_context, syncobjs));
 
-      cs_add64(b, sync_addr, sync_addr,
+      cs_add_imm64(b, sync_addr, sync_addr,
                PANVK_SUBQUEUE_COMPUTE * sizeof(struct panvk_cs_sync64));
       cs_move64_to(b, add_val, 1);
       panvk_instr_sync64_add(cmdbuf, PANVK_SUBQUEUE_COMPUTE, true,
@@ -62,7 +62,7 @@ void panvk_per_arch(cmd_signal_barrier)(
                  BITFIELD_MASK(3),
                  offsetof(struct panvk_cs_subqueue_context, syncobjs));
 
-      cs_add64(b, sync_addr, sync_addr,
+      cs_add_imm64(b, sync_addr, sync_addr,
                PANVK_SUBQUEUE_COMPUTE * sizeof(struct panvk_cs_sync64));
       cs_move64_to(b, add_val, 1);
 
