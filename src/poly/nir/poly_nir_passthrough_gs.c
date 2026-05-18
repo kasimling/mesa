@@ -6,17 +6,17 @@
  */
 
 #include "util/bitscan.h"
-#include "hk_shader.h"
+#include "poly_nir.h"
 #include "nir.h"
 #include "nir_builder.h"
 #include "nir_xfb_info.h"
 #include "shader_enums.h"
 
 void
-hk_nir_passthrough_gs(nir_builder *b, const void *key_)
+poly_nir_passthrough_gs(nir_builder *b, const void *key_)
 {
    nir_shader *s = b->shader;
-   const struct hk_passthrough_gs_key *key = key_;
+   const struct poly_passthrough_gs_key *key = key_;
    assert(key->prim == u_decomposed_prim(key->prim));
    assert(key->prim != MESA_PRIM_PATCHES && "tessellation consumes patches");
 
@@ -69,11 +69,7 @@ hk_nir_passthrough_gs(nir_builder *b, const void *key_)
          unsigned adjusted_loc = loc;
          nir_def *offset = zero;
          unsigned num_slots = 1;
-
-         bool scalar = loc == VARYING_SLOT_LAYER ||
-                       loc == VARYING_SLOT_VIEW_INDEX ||
-                       loc == VARYING_SLOT_VIEWPORT || loc == VARYING_SLOT_PSIZ;
-         unsigned comps = scalar ? 1 : 4;
+         unsigned comps = key->output_components[loc];
 
          /* We use combined, compact clip/cull */
          if (loc == VARYING_SLOT_CLIP_DIST1 || loc == VARYING_SLOT_CULL_DIST1) {
@@ -97,12 +93,18 @@ hk_nir_passthrough_gs(nir_builder *b, const void *key_)
             .num_slots = num_slots,
          };
 
-         nir_def *val = nir_load_per_vertex_input(b, comps, 32, vertex, offset,
-                                                  .io_semantics = sem);
+         nir_alu_type type = key->output_types[loc];
+         unsigned bit_size = nir_alu_type_get_type_size(type);
+
+         nir_def *val = nir_load_per_vertex_input(b, comps, bit_size, vertex,
+                                                  offset,
+                                                  .io_semantics = sem,
+                                                  .dest_type = type);
 
          for (unsigned c = 0; c < comps; ++c) {
             nir_store_output(b, nir_channel(b, val, c), offset,
-                             .io_semantics = sem, .src_type = nir_type_uint32,
+                             .io_semantics = sem,
+                             .src_type = type,
                              .component = c);
          }
       }
