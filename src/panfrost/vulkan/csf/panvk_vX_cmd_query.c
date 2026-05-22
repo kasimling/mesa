@@ -704,12 +704,12 @@ panvk_copy_timestamp_query_results(struct panvk_cmd_buffer *cmd,
 static void
 panvk_cmd_begin_prims_generated_query(
    struct panvk_cmd_buffer *cmd, struct panvk_query_pool *pool, uint32_t query,
-   VkQueryControlFlags flags)
+   VkQueryControlFlags flags, uint32_t index)
 {
    uint64_t report_addr = panvk_query_report_dev_addr(pool, query);
 
-   cmd->state.gfx.prims_generated_query.ptr = report_addr;
-   cmd->state.gfx.prims_generated_query.syncobj =
+   cmd->state.gfx.prims_generated_query[index].ptr = report_addr;
+   cmd->state.gfx.prims_generated_query[index].syncobj =
       panvk_query_available_dev_addr(pool, query);
 
    /* From the Vulkan spec:
@@ -730,10 +730,11 @@ panvk_cmd_begin_prims_generated_query(
 
 static void
 panvk_cmd_end_prims_generated_query(
-   struct panvk_cmd_buffer *cmd, struct panvk_query_pool *pool, uint32_t query)
+   struct panvk_cmd_buffer *cmd, struct panvk_query_pool *pool, uint32_t query,
+   uint32_t index)
 {
-   cmd->state.gfx.prims_generated_query.ptr = 0;
-   cmd->state.gfx.prims_generated_query.syncobj = 0;
+   cmd->state.gfx.prims_generated_query[index].ptr = 0;
+   cmd->state.gfx.prims_generated_query[index].syncobj = 0;
 
    struct cs_builder *b = panvk_get_cs_builder(cmd, PANVK_SUBQUEUE_COMPUTE);
    struct cs_index query_syncobj = cs_scratch_reg64(b, 0);
@@ -862,8 +863,7 @@ panvk_per_arch(CmdBeginQueryIndexedEXT)(VkCommandBuffer commandBuffer,
       break;
    }
    case VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT: {
-      assert(index == 0);
-      panvk_cmd_begin_prims_generated_query(cmd, pool, query, flags);
+      panvk_cmd_begin_prims_generated_query(cmd, pool, query, flags, index);
       break;
    }
    case VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT: {
@@ -890,8 +890,7 @@ panvk_per_arch(CmdEndQueryIndexedEXT)(VkCommandBuffer commandBuffer,
       break;
    }
    case VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT: {
-      assert(index == 0);
-      panvk_cmd_end_prims_generated_query(cmd, pool, query);
+      panvk_cmd_end_prims_generated_query(cmd, pool, query, index);
       break;
    }
    case VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT: {
