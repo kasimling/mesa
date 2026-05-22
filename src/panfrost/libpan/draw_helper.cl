@@ -642,3 +642,19 @@ panlib_draw_index_minmax_search_helper(global uint8_t *index_buffer_ptr,
 }
 
 #endif
+
+#if PAN_ARCH >= 10 && PAN_ARCH < 13
+
+/* On v13+, we implement bytecount indirect in terms of cs_udiv. On <v13,
+ * cs_udiv is not available, so we use a 1x1x1 shader dispatch */
+KERNEL(1)
+panlib_draw_indirect_byte_count_helper(constant uint32_t *byte_count,
+                                       uint32_t counter_offset,
+                                       uint32_t vertex_stride,
+                                       global uint32_t *vertex_count)
+{
+   *vertex_count =
+      MAX2(0, (int32_t) (*byte_count) - counter_offset) / vertex_stride;
+}
+
+#endif

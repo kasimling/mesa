@@ -1362,7 +1362,7 @@ panvk_per_arch(get_physical_device_properties)(
       properties->transformFeedbackQueries = false;
       properties->transformFeedbackStreamsLinesTriangles = true;
       properties->transformFeedbackRasterizationStreamSelect = true;
-      properties->transformFeedbackDraw = false;
+      properties->transformFeedbackDraw = true;
    }
 
    /* VK_EXT_physical_device_drm */
