@@ -3572,11 +3572,45 @@ static void
 launch_indirect_draw(struct panvk_cmd_buffer *cmdbuf,
                      const struct panvk_draw_info *draw)
 {
+#if PAN_ARCH < 13
+   struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
+#endif
    const struct cs_tracing_ctx *tracing_ctx =
       &cmdbuf->state.cs[PANVK_SUBQUEUE_VERTEX_TILER].tracing;
    const struct panvk_shader_variant *vs = get_hw_vs(cmdbuf);
    struct cs_builder *b =
       panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_VERTEX_TILER);
+
+   struct pan_ptr vertex_count = {0};
+#if PAN_ARCH < 13
+   if (draw_is_byte_count_indirect(draw)) {
+      vertex_count = panvk_cmd_alloc_dev_mem(cmdbuf, desc, sizeof(uint32_t),
+                                             sizeof(uint32_t));
+      if (vertex_count.gpu == 0) {
+         vk_command_buffer_set_error(&cmdbuf->vk,
+                                     VK_ERROR_OUT_OF_DEVICE_MEMORY);
+         return;
+      }
+
+      struct panvk_precomp_ctx precomp_ctx = panvk_per_arch(precomp_cs)(cmdbuf);
+      struct panlib_draw_indirect_byte_count_helper_args args = {
+         .byte_count = draw->indirect.buffer_dev_addr,
+         .counter_offset = draw->indirect.counter_offset,
+         .vertex_stride = draw->indirect.vertex_stride,
+         .vertex_count = vertex_count.gpu,
+      };
+      panlib_draw_indirect_byte_count_helper_struct(
+         &precomp_ctx, panlib_1d(1), PANLIB_BARRIER_CSF_SYNC, args);
+
+      const struct panvk_cs_deps deps = {
+         .src[PANVK_SUBQUEUE_COMPUTE].wait_sb_mask =
+            dev->csf.sb.all_iters_mask,
+         .dst[PANVK_SUBQUEUE_VERTEX_TILER].wait_subqueue_mask =
+            BITFIELD_BIT(PANVK_SUBQUEUE_COMPUTE),
+      };
+      panvk_per_arch(emit_barrier)(cmdbuf, deps);
+   }
+#endif
 
    /* Layered indirect draw (VK_EXT_shader_viewport_index_layer) needs
     * additional changes. We allow layer_count == 0 because that happens
@@ -3623,7 +3657,11 @@ launch_indirect_draw(struct panvk_cmd_buffer *cmdbuf,
    if (patch_faus)
       cs_move64_to(b, vs_fau_addr, cmdbuf->state.gfx.hw_vs.push_uniforms);
 
-   cs_move64_to(b, draw_params_addr, draw->indirect.buffer_dev_addr);
+   if (draw_is_byte_count_indirect(draw) && PAN_ARCH < 13)
+      cs_move64_to(b, draw_params_addr, vertex_count.gpu);
+   else
+      cs_move64_to(b, draw_params_addr, draw->indirect.buffer_dev_addr);
+
    cs_move32_to(b, draw_id, 0);
 
    panvk_cond_render(cmdbuf, b)
@@ -3653,7 +3691,8 @@ launch_indirect_draw(struct panvk_cmd_buffer *cmdbuf,
             cs_udiv32(b, index_count, index_count,
                       draw->indirect.vertex_stride, div_scratch_regs);
 #else
-            UNREACHABLE("TODO: DrawIndirectByteCount on <v13");
+            cs_load32_to(b, cs_sr_reg32(b, IDVS, INDEX_COUNT),
+                         draw_params_addr, 0);
 #endif
          } else {
             /* Load SR33-37 from indirect buffer. */
