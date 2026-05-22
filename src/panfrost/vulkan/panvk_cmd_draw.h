@@ -156,7 +156,8 @@ struct panvk_cmd_graphics_state {
 
    struct panvk_occlusion_query_state occlusion_query;
 #if PAN_ARCH >= 10
-   struct panvk_prims_generated_query_state prims_generated_query;
+   struct panvk_prims_generated_query_state
+      prims_generated_query[POLY_MAX_VERTEX_STREAMS];
    struct panvk_xfb_query_state xfb_query[POLY_MAX_VERTEX_STREAMS];
 #endif
    struct panvk_graphics_sysvals sysvals;

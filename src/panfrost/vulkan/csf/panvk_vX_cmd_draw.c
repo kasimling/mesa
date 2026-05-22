@@ -882,9 +882,12 @@ prepare_poly(struct panvk_cmd_buffer *cmdbuf,
    for (unsigned i = 0; i < ARRAY_SIZE(gp->prims_generated_counter); i++) {
       bool xfb = cmdbuf->state.gfx.xfb.active;
       struct panvk_xfb_query_state *xfb_query = &cmdbuf->state.gfx.xfb_query[i];
+      struct panvk_prims_generated_query_state *prims_generated_query =
+         &cmdbuf->state.gfx.prims_generated_query[i];
 
-      /* TODO: primitives generated query */
-      gp->prims_generated_counter[i] = PAN_SHADER_OOB_ADDRESS;
+      gp->prims_generated_counter[i] =
+         prims_generated_query->ptr ? prims_generated_query->ptr
+                                    : PAN_SHADER_OOB_ADDRESS;
       gp->xfb_prims_generated_counter[i] =
          xfb && xfb_query->ptr ? panvk_xfb_query_prims_generated(xfb_query) :
                                  PAN_SHADER_OOB_ADDRESS;
@@ -3060,8 +3063,13 @@ update_prims_generated_query(struct panvk_cmd_buffer *cmdbuf,
    struct cs_builder *b =
       panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_COMPUTE);
    struct vk_input_assembly_state *ia = &cmdbuf->vk.dynamic_graphics_state.ia;
+   /* Non-GS draws only output to vertex stream 0 */
    struct panvk_prims_generated_query_state *state =
-      &cmdbuf->state.gfx.prims_generated_query;
+      &cmdbuf->state.gfx.prims_generated_query[0];
+
+   /* GS draws handle prims generated query in the pre-GS shader */
+   if (cmdbuf->state.gfx.gs.shader)
+      return;
 
    if (!state->ptr)
       return;
@@ -3317,7 +3325,8 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
       if (i == 0 || gsi->multistream) {
          has_gs_queries = has_gs_queries ||
             (cmdbuf->state.gfx.xfb.active &&
-             cmdbuf->state.gfx.xfb_query[i].ptr);
+             cmdbuf->state.gfx.xfb_query[i].ptr) ||
+            cmdbuf->state.gfx.prims_generated_query[i].ptr;
       }
    }
 
@@ -3537,8 +3546,10 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
             .y = 1,
             .z = 1,
          },
-         .barrier = dispatches_left > 0 ? PANVK_CSF_BARRIER_WAIT
-                                        : PANVK_CSF_BARRIER_SYNC,
+         /* We need to use WAIT with queries because the prims generated query
+          * may be incremented in CSF later on the non-GS path */
+         .barrier = dispatches_left > 0 || has_gs_queries ?
+            PANVK_CSF_BARRIER_WAIT : PANVK_CSF_BARRIER_SYNC,
       };
       launch_gfx_cs(cmdbuf, pre, &cmdbuf->state.gfx.gs.desc, 0, &single_disp);
    }
@@ -4008,7 +4019,8 @@ panvk_cmd_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
       if (i == 0 || (gs && gs->gs.gs_info.multistream)) {
          has_gs_queries = has_gs_queries ||
             (cmdbuf->state.gfx.xfb.active &&
-             cmdbuf->state.gfx.xfb_query[i].ptr);
+             cmdbuf->state.gfx.xfb_query[i].ptr) ||
+            cmdbuf->state.gfx.prims_generated_query[i].ptr;
       }
    }
    if (empty_hw_vs && !has_gs_queries)
