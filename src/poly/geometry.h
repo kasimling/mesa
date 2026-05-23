@@ -253,9 +253,13 @@ struct poly_geometry_params {
     */
    DEVICE(uint) count_buffer;
 
-   /* Address of the primitives generated counters */
+   /* Address of the query counters */
+   /* Counter of primitives generated for both XFB and non-XFB */
    DEVICE(uint) prims_generated_counter[POLY_MAX_VERTEX_STREAMS];
+   /* Counter of primitives generated for XFB only */
    DEVICE(uint) xfb_prims_generated_counter[POLY_MAX_VERTEX_STREAMS];
+   /* Counter of primitives that were actually written to the XFB buffer */
+   DEVICE(uint) xfb_prims_written_counter[POLY_MAX_VERTEX_STREAMS];
    DEVICE(uint) xfb_overflow[POLY_MAX_VERTEX_STREAMS];
    DEVICE(uint) xfb_any_overflow;
 
@@ -294,8 +298,8 @@ struct poly_geometry_params {
    /* Total number of input primitives across all instances in all draws */
    uint32_t total_input_primitives;
 } PACKED;
-static_assert(sizeof(struct poly_geometry_params) == 65 * 4,
-              "struct poly_geometry_params must be 65 words");
+static_assert(sizeof(struct poly_geometry_params) == 73 * 4,
+              "struct poly_geometry_params must be 73 words");
 
 struct poly_geometry_draw_params {
    /* Output index buffer, allocated by pre-GS. */

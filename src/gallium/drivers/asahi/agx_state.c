@@ -3953,13 +3953,17 @@ agx_batch_upload_geometry_params(struct agx_batch *batch,
       }
    }
 
+   for (unsigned i = 0; i < ARRAY_SIZE(params.xfb_prims_generated_counter); ++i) {
+      params.xfb_prims_generated_counter[i] = AGX_SCRATCH_PAGE_ADDRESS;
+   }
+
    for (unsigned i = 0; i < ARRAY_SIZE(batch->ctx->prims_generated); ++i) {
       params.prims_generated_counter[i] =
          agx_get_query_address(batch, batch->ctx->prims_generated[i]);
    }
 
    for (unsigned i = 0; i < ARRAY_SIZE(batch->ctx->tf_prims_generated); ++i) {
-      params.xfb_prims_generated_counter[i] =
+      params.xfb_prims_written_counter[i] =
          agx_get_query_address(batch, batch->ctx->tf_prims_generated[i]);
    }
 
