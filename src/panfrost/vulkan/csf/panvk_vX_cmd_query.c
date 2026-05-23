@@ -35,6 +35,7 @@ panvk_subqueue_for_query_type(VkQueryType type)
    case VK_QUERY_TYPE_OCCLUSION:
       return PANVK_SUBQUEUE_FRAGMENT;
    case VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT:
+   case VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT:
       return PANVK_SUBQUEUE_COMPUTE;
    default:
       UNREACHABLE("Unsupported query type");
@@ -70,9 +71,10 @@ panvk_subqueue_for_query_type(VkQueryType type)
 /* Default path for query types that don't need special logic */
 static void
 reset_queries_batch(struct cs_builder *b, struct cs_index addr,
-               struct cs_index zero_regs, uint32_t query_count)
+               struct cs_index zero_regs, uint32_t query_count,
+               uint32_t query_size)
 {
-   const uint32_t regs_per_query = 2;
+   const uint32_t regs_per_query = query_size / 4;
    const uint32_t queries_per_batch = zero_regs.size / regs_per_query;
    uint32_t remaining_queries = query_count;
 
@@ -132,10 +134,13 @@ panvk_cmd_reset_queries(struct panvk_cmd_buffer *cmd,
     * cs_sync32_wait(). The only reason we use a syncobj is so we can
     * defer the signalling in the issue_fragmnent_jobs() path. */
    cs_move64_to(b, addr, panvk_query_available_dev_addr(pool, first_query));
-   reset_queries_batch(b, addr, zero_regs, query_count);
+   reset_queries_batch(b, addr, zero_regs, query_count,
+                       sizeof(struct panvk_query_available_obj));
 
    cs_move64_to(b, addr, panvk_query_report_dev_addr(pool, first_query));
-   reset_queries_batch(b, addr, zero_regs, query_count);
+   uint32_t query_reports_size = pool->reports_per_query *
+                                 sizeof(struct panvk_query_report);
+   reset_queries_batch(b, addr, zero_regs, query_count, query_reports_size);
 
    /* reset_queries_batch() only does the stores, we need to flush those explicitly
     * here. */
@@ -158,21 +163,39 @@ copy_result_batch(struct cs_builder *b,
                   struct cs_index res_addr,
                   struct cs_index avail_addr,
                   struct cs_index scratch_regs,
-                  uint32_t query_count)
+                  uint32_t query_count,
+                  uint32_t reports_per_query)
 {
-   uint32_t res_size = (flags & VK_QUERY_RESULT_64_BIT) ? 2 : 1;
+   uint32_t src_reports_size = reports_per_query *
+                               sizeof(struct panvk_query_report);
+   uint32_t dst_report_size = (flags & VK_QUERY_RESULT_64_BIT) ?
+                              sizeof(uint64_t) : sizeof(uint32_t);
+   uint32_t dst_reports_size = reports_per_query * dst_report_size;
+   uint32_t reports_regs = dst_reports_size / 4;
    uint32_t regs_per_copy =
-      res_size + ((flags & VK_QUERY_RESULT_WITH_AVAILABILITY_BIT) ? 1 : 0);
+      reports_regs + ((flags & VK_QUERY_RESULT_WITH_AVAILABILITY_BIT) ? 1 : 0);
 
    assert(query_count <= scratch_regs.size / regs_per_copy);
 
    for (uint32_t i = 0; i < query_count; i++) {
       struct cs_index res =
-         cs_reg_tuple(b, scratch_regs.reg + (i * regs_per_copy), res_size);
-      struct cs_index avail = cs_reg32(b, res.reg + res_size);
+         cs_reg_tuple(b, scratch_regs.reg + (i * regs_per_copy), reports_regs);
+      struct cs_index avail = cs_reg32(b, res.reg + reports_regs);
+      uint32_t res_offset = i * src_reports_size;
 
-      cs_load_to(b, res, res_addr, BITFIELD_MASK(res.size),
-                 i * sizeof(uint64_t));
+      if (flags & VK_QUERY_RESULT_64_BIT) {
+         /* for 64->64 copies, src reports are contiguous, so we can use a
+          * single load */
+         cs_load_to(b, res, res_addr, BITFIELD_MASK(res.size), res_offset);
+      } else {
+         /* otherwise we need a separate load for each report */
+         for (uint32_t report = 0; report < reports_per_query; report++) {
+            uint32_t report_offset =
+               res_offset + report * sizeof(struct panvk_query_report);
+            cs_load32_to(b, cs_extract32(b, res, report), res_addr,
+                         report_offset);
+         }
+      }
 
       if (flags & VK_QUERY_RESULT_WITH_AVAILABILITY_BIT)
          cs_load32_to(b, avail, avail_addr, i * sizeof(struct panvk_cs_sync32));
@@ -206,9 +229,14 @@ panvk_copy_query_results(struct panvk_cmd_buffer *cmd,
    if (flags & VK_QUERY_RESULT_WAIT_BIT)
       cs_wait_slot(b, SB_ID(DEFERRED_SYNC));
 
-   uint32_t res_size = (flags & VK_QUERY_RESULT_64_BIT) ? 2 : 1;
+   uint32_t src_reports_size = pool->reports_per_query *
+                               sizeof(struct panvk_query_report);
+   uint32_t dst_report_size = (flags & VK_QUERY_RESULT_64_BIT) ?
+                              sizeof(uint64_t) : sizeof(uint32_t);
+   uint32_t dst_reports_size = pool->reports_per_query * dst_report_size;
+   uint32_t reports_regs = dst_reports_size / 4;
    uint32_t regs_per_copy =
-      res_size + ((flags & VK_QUERY_RESULT_WITH_AVAILABILITY_BIT) ? 1 : 0);
+      reports_regs + ((flags & VK_QUERY_RESULT_WITH_AVAILABILITY_BIT) ? 1 : 0);
 
    struct cs_index dst_addr = cs_scratch_reg64(b, 16);
    struct cs_index res_addr = cs_scratch_reg64(b, 14);
@@ -236,12 +264,13 @@ panvk_copy_query_results(struct panvk_cmd_buffer *cmd,
                    panvk_query_available_dev_addr(pool, first_query));
       cs_while(b, MALI_CS_CONDITION_GREATER, counter) {
          copy_result_batch(b, flags, dst_addr, stride, res_addr, avail_addr,
-                           scratch_regs, queries_per_batch);
+                           scratch_regs, queries_per_batch,
+                           pool->reports_per_query);
 
          cs_add_imm32(b, counter, counter, -queries_per_batch);
          cs_add_imm64(b, dst_addr, dst_addr, queries_per_batch * stride);
          cs_add_imm64(b, res_addr, res_addr,
-                      queries_per_batch * sizeof(uint64_t));
+                      queries_per_batch * src_reports_size);
          cs_add_imm64(b, avail_addr, avail_addr,
                       queries_per_batch * sizeof(uint64_t));
       }
@@ -259,7 +288,8 @@ panvk_copy_query_results(struct panvk_cmd_buffer *cmd,
                    panvk_query_available_dev_addr(pool, i + first_query));
       copy_result_batch(b, flags, dst_addr, stride, res_addr, avail_addr,
                         scratch_regs,
-                        MIN2(queries_per_batch, query_count - i));
+                        MIN2(queries_per_batch, query_count - i),
+                        pool->reports_per_query);
    }
 }
 
@@ -385,7 +415,8 @@ panvk_cmd_reset_timestamp_queries(struct panvk_cmd_buffer *cmd,
    struct cs_index addr = cs_scratch_reg64(b, 16);
    struct cs_index zero_regs = cs_scratch_reg_tuple(b, 0, 16);
    cs_move64_to(b, addr, panvk_query_available_dev_addr(pool, first_query));
-   reset_queries_batch(b, addr, zero_regs, query_count);
+   reset_queries_batch(b, addr, zero_regs, query_count,
+                       sizeof(struct panvk_query_available_obj));
    cs_flush_stores(b);
 }
 
@@ -728,6 +759,65 @@ panvk_cmd_end_prims_generated_query(
                  cs_defer(SB_MASK(DEFERRED_FLUSH), SB_ID(DEFERRED_SYNC)));
 }
 
+static void
+panvk_cmd_begin_xfb_query(
+   struct panvk_cmd_buffer *cmd, struct panvk_query_pool *pool, uint32_t query,
+   VkQueryControlFlags flags)
+{
+   uint64_t report_addr = panvk_query_report_dev_addr(pool, query);
+
+   cmd->state.gfx.xfb_query.ptr = report_addr;
+   cmd->state.gfx.xfb_query.syncobj =
+      panvk_query_available_dev_addr(pool, query);
+
+   /* From the Vulkan spec:
+    *
+    *   "When a transform feedback query begins, the count of primitives written
+    *    and primitives needed starts from zero."
+    *
+    */
+   struct cs_builder *b = panvk_get_cs_builder(cmd, PANVK_SUBQUEUE_COMPUTE);
+
+   struct cs_index report_addr_gpu = cs_scratch_reg64(b, 0);
+   /* XFB queries take up two 64-bit slots */
+   struct cs_index clear_value = cs_scratch_reg_tuple(b, 2, 4);
+   cs_move64_to(b, report_addr_gpu, report_addr);
+   cs_move64_to(b, cs_extract64(b, clear_value, 0), 0);
+   cs_move64_to(b, cs_extract64(b, clear_value, 2), 0);
+   cs_store(b, clear_value, report_addr_gpu, BITFIELD_MASK(4), 0);
+   cs_flush_stores(b);
+}
+
+static void
+panvk_cmd_end_xfb_query(
+   struct panvk_cmd_buffer *cmd, struct panvk_query_pool *pool, uint32_t query)
+{
+   cmd->state.gfx.xfb_query.ptr = 0;
+   cmd->state.gfx.xfb_query.syncobj = 0;
+
+   struct cs_builder *b = panvk_get_cs_builder(cmd, PANVK_SUBQUEUE_COMPUTE);
+   struct cs_index query_syncobj = cs_scratch_reg64(b, 0);
+   struct cs_index val = cs_scratch_reg32(b, 2);
+
+   /* Query accumulates sample counts to the report which is on a cached memory.
+    * Wait for the accumulation and flush the caches.
+    *
+    * No need to wait on iter_sb because all shader invocations to update the
+    * counter use PANLIB_BARRIER_CSF_WAIT already.
+    */
+   cs_move32_to(b, val, 0);
+   cs_flush_caches(
+      b, MALI_CS_FLUSH_MODE_CLEAN, MALI_CS_FLUSH_MODE_CLEAN,
+      MALI_CS_OTHER_FLUSH_MODE_NONE, val,
+      cs_defer(SB_IMM_MASK, SB_ID(DEFERRED_FLUSH)));
+
+   /* Signal the query syncobj after the flush is effective. */
+   cs_move32_to(b, val, 1);
+   cs_move64_to(b, query_syncobj, panvk_query_available_dev_addr(pool, query));
+   cs_sync32_set(b, true, MALI_CS_SYNC_SCOPE_CSG, val, query_syncobj,
+                 cs_defer(SB_MASK(DEFERRED_FLUSH), SB_ID(DEFERRED_SYNC)));
+}
+
 VKAPI_ATTR void VKAPI_CALL
 panvk_per_arch(CmdResetQueryPool)(VkCommandBuffer commandBuffer,
                                   VkQueryPool queryPool, uint32_t firstQuery,
@@ -741,7 +831,8 @@ panvk_per_arch(CmdResetQueryPool)(VkCommandBuffer commandBuffer,
 
    switch (pool->vk.query_type) {
    case VK_QUERY_TYPE_OCCLUSION:
-   case VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT: {
+   case VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT:
+   case VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT: {
       panvk_cmd_reset_queries(cmd, pool, firstQuery, queryCount);
       break;
    }
@@ -775,6 +866,10 @@ panvk_per_arch(CmdBeginQueryIndexedEXT)(VkCommandBuffer commandBuffer,
       panvk_cmd_begin_prims_generated_query(cmd, pool, query, flags);
       break;
    }
+   case VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT: {
+      panvk_cmd_begin_xfb_query(cmd, pool, query, flags);
+      break;
+   }
    default:
       UNREACHABLE("Unsupported query type");
    }
@@ -798,6 +893,10 @@ panvk_per_arch(CmdEndQueryIndexedEXT)(VkCommandBuffer commandBuffer,
    }
    case VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT: {
       panvk_cmd_end_prims_generated_query(cmd, pool, query);
+      break;
+   }
+   case VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT: {
+      panvk_cmd_end_xfb_query(cmd, pool, query);
       break;
    }
    default:
@@ -830,7 +929,8 @@ panvk_per_arch(CmdCopyQueryPoolResults)(
 
    switch (pool->vk.query_type) {
    case VK_QUERY_TYPE_OCCLUSION:
-   case VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT: {
+   case VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT:
+   case VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT: {
       panvk_copy_query_results(cmd, pool, firstQuery, queryCount,
                                dst_buffer_addr, stride, flags);
       break;

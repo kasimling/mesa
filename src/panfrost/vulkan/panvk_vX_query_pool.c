@@ -70,6 +70,10 @@ panvk_per_arch(CreateQueryPool)(VkDevice _device,
       reports_per_query = 1;
       break;
    }
+   case VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT: {
+      reports_per_query = 2;
+      break;
+   }
 #endif
    default:
       UNREACHABLE("Unsupported query type");
@@ -262,6 +266,8 @@ panvk_per_arch(GetQueryPoolResults)(VkDevice _device, VkQueryPool queryPool,
       assert(i * stride < dataSize);
       void *dst = (char *)pData + i * stride;
 
+      uint32_t result_count = 1;
+
       panvk_priv_mem_readback(pool->mem, panvk_query_offset(pool, query),
                               struct panvk_query_report, src) {
          switch (pool->vk.query_type) {
@@ -283,6 +289,23 @@ panvk_per_arch(GetQueryPoolResults)(VkDevice _device, VkQueryPool queryPool,
                cpu_write_query_result(dst, 0, flags, src[0].value);
             break;
          }
+         case VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT: {
+            /* From the Vulkan 1.4.317 spec:
+             *
+             *   "Transform feedback queries write two integers; the first
+             *    integer is the number of primitives successfully written to
+             *    the corresponding transform feedback buffer and the second is
+             *    the number of primitives output to the vertex stream,
+             *    regardless of whether they were successfully captured or
+             *    not."
+             */
+            result_count = 2;
+            if (write_results) {
+               cpu_write_query_result(dst, 0, flags, src[0].value);
+               cpu_write_query_result(dst, 1, flags, src[1].value);
+            }
+            break;
+         }
 #endif
          default:
             UNREACHABLE("Unsupported query type");
@@ -293,7 +316,7 @@ panvk_per_arch(GetQueryPoolResults)(VkDevice _device, VkQueryPool queryPool,
          status = VK_NOT_READY;
 
       if (flags & VK_QUERY_RESULT_WITH_AVAILABILITY_BIT)
-         cpu_write_query_result(dst, 1, flags, available);
+         cpu_write_query_result(dst, result_count, flags, available);
    }
 
    return status;

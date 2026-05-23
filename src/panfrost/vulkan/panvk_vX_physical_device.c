@@ -1283,7 +1283,7 @@ panvk_per_arch(get_physical_device_properties)(
       properties->maxTransformFeedbackStreamDataSize = 2048;
       properties->maxTransformFeedbackBufferDataSize = 512;
       properties->maxTransformFeedbackBufferDataStride = 2048;
-      properties->transformFeedbackQueries = false;
+      properties->transformFeedbackQueries = true;
       properties->transformFeedbackStreamsLinesTriangles = true;
       properties->transformFeedbackRasterizationStreamSelect = true;
       properties->transformFeedbackDraw = true;
