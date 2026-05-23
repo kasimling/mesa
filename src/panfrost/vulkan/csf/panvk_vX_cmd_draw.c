@@ -903,10 +903,18 @@ prepare_poly(struct panvk_cmd_buffer *cmdbuf,
       gdp->output_index_buffer = gs_index_buffer.gpu;
    }
 
-   /* TODO: queries */
    for (unsigned i = 0; i < ARRAY_SIZE(gp->prims_generated_counter); i++) {
+      bool xfb = cmdbuf->state.gfx.xfb.active;
+      struct panvk_xfb_query_state *xfb_query = &cmdbuf->state.gfx.xfb_query[i];
+
+      /* TODO: primitives generated query */
       gp->prims_generated_counter[i] = PAN_SHADER_OOB_ADDRESS;
-      gp->xfb_prims_generated_counter[i] = PAN_SHADER_OOB_ADDRESS;
+      gp->xfb_prims_generated_counter[i] =
+         xfb && xfb_query->ptr ? panvk_xfb_query_prims_generated(xfb_query) :
+                                 PAN_SHADER_OOB_ADDRESS;
+      gp->xfb_prims_written_counter[i] =
+         xfb && xfb_query->ptr ? panvk_xfb_query_prims_written(xfb_query) :
+                                 PAN_SHADER_OOB_ADDRESS;
    }
 
    /* these queries are only used for gallium */
@@ -3687,6 +3695,16 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
    bool is_multidraw = is_indirect &&
                        (draw.indirect.draw_count != 1 ||
                         draw.indirect.count_buffer_dev_addr != 0);
+   bool empty_hw_vs = !panvk_priv_mem_check_alloc(get_hw_vs(cmdbuf)->spd);
+   bool has_gs_queries = false;
+   for (unsigned i = 0; i < POLY_MAX_VERTEX_STREAMS; i++) {
+      /* Unless we have a multistream GS, all vertices output to stream 0 */
+      if (i == 0 || gsi->multistream) {
+         has_gs_queries = has_gs_queries ||
+            (cmdbuf->state.gfx.xfb.active &&
+             cmdbuf->state.gfx.xfb_query[i].ptr);
+      }
+   }
 
    assert(!is_multiview); /* TODO: multiview */
 
@@ -3703,9 +3721,9 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
       dispatches_left++;
    if (gsi->count_words && gsi->prefix_sum)
       dispatches_left++;
-   if (pre && cmdbuf->state.gfx.xfb.active)
+   if (pre && (cmdbuf->state.gfx.xfb.active || has_gs_queries))
       dispatches_left++;
-   if (main->bin_size)
+   if (main->bin_size && !empty_hw_vs)
       dispatches_left++;
 
    uint64_t vs_push_uniforms = prepare_sw_vs_push_uniforms(cmdbuf, &draw);
@@ -3896,7 +3914,7 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
                              barrier, cmdbuf->state.gfx.poly.gp_addr);
    }
 
-   if (pre && cmdbuf->state.gfx.xfb.active) {
+   if (pre && (cmdbuf->state.gfx.xfb.active || has_gs_queries)) {
       dispatches_left--;
       struct panvk_dispatch_info single_disp = {
          .direct.wg_count = {
@@ -3912,7 +3930,10 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
 
    /* TODO: if POLY_GS_SHAPE_STATIC_INDEXED and no XFB, we can probably limit
     * to a single dispatch even with multidraw */
-   if (main->bin_size) {
+   /* If we are going to skip the rest of the draw and just needed the pre-GS,
+    * then there is no need to run the main GS shader.
+    */
+   if (main->bin_size && !empty_hw_vs) {
       dispatches_left--;
       gs_disp.barrier = dispatches_left > 0 ? PANVK_CSF_BARRIER_WAIT
                                             : PANVK_CSF_BARRIER_SYNC;
@@ -4433,16 +4454,30 @@ panvk_cmd_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
 
    /* If there's no hardware vertex shader, then nothing is going to generate
     * positions so it's all undefined and we can skip the draw.  If we don't,
-    * we can end up in a situation where the IDVS faults.
+    * we can end up in a situation where the IDVS faults.  However, if we have
+    * queries that are updated by the pre-GS shader, we still need to run the
+    * draw up to that point before aborting.  If not, we can abort early.
     */
-   if (!panvk_priv_mem_check_alloc(get_hw_vs(cmdbuf)->spd))
+   bool empty_hw_vs = !panvk_priv_mem_check_alloc(get_hw_vs(cmdbuf)->spd);
+   bool has_gs_queries = false;
+   for (unsigned i = 0; i < POLY_MAX_VERTEX_STREAMS; i++) {
+      /* Unless we have a multistream GS, all vertices output to stream 0 */
+      if (i == 0 || (gs && gs->gs.gs_info.multistream)) {
+         has_gs_queries = has_gs_queries ||
+            (cmdbuf->state.gfx.xfb.active &&
+             cmdbuf->state.gfx.xfb_query[i].ptr);
+      }
+   }
+   if (empty_hw_vs && !has_gs_queries)
       return;
 
    /* Unless we have a multistream GS, all vertices are output to stream 0,
     * and we can skip draws with nonzero rasterization stream unless there are
     * other side effects. */
+   /* TODO: skip early if we have queries but don't need the draw */
    if (cmdbuf->vk.dynamic_graphics_state.rs.rasterization_stream != 0 &&
-       (gs && !gs->gs.gs_info.multistream && !cmdbuf->state.gfx.xfb.active))
+       (gs && !gs->gs.gs_info.multistream && !cmdbuf->state.gfx.xfb.active &&
+        !has_gs_queries))
       return;
 
    if (cmdbuf->state.gfx.vi.base_instance != draw.instance.base) {
@@ -4487,6 +4522,12 @@ panvk_cmd_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
          draw = unroll_restart(cmdbuf, draw);
 
       draw = launch_gs(cmdbuf, draw);
+
+      /* If we want to skip the draw but needed to run the pre-GS, then we can
+       * cancel now that it has been run.
+       */
+      if (empty_hw_vs)
+         return;
 
       const struct panvk_cs_deps deps = {
          .src[PANVK_SUBQUEUE_COMPUTE].wait_sb_mask =

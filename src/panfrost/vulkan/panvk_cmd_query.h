@@ -25,6 +25,23 @@ struct panvk_prims_generated_query_state {
    uint64_t syncobj;
    uint64_t ptr;
 };
+
+struct panvk_xfb_query_state {
+   uint64_t syncobj;
+   uint64_t ptr;
+};
+
+static inline uint64_t
+panvk_xfb_query_prims_written(struct panvk_xfb_query_state *state)
+{
+   return state->ptr;
+}
+
+static inline uint64_t
+panvk_xfb_query_prims_generated(struct panvk_xfb_query_state *state)
+{
+   return state->ptr + sizeof(uint64_t);
+}
 #endif
 
 #endif
