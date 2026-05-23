@@ -1173,11 +1173,14 @@ hk_upload_geometry_params(struct hk_cmd_buffer *cmd, struct agx_draw draw)
    for (unsigned i = 0; i < ARRAY_SIZE(gfx->xfb_query); ++i) {
       uint64_t q = gfx->xfb_query[i];
 
+      /* TODO: I think the previous use of prims_generated_counter was a bug,
+       * and that xfb queries in vulkan should only count when xfb is enabled */
+      params.xfb_prims_generated_counter[i] = AGX_SCRATCH_PAGE_ADDRESS;
       if (q) {
-         params.xfb_prims_generated_counter[i] = q;
+         params.xfb_prims_written_counter[i] = q;
          params.prims_generated_counter[i] = q + sizeof(uint64_t);
       } else {
-         params.xfb_prims_generated_counter[i] = AGX_SCRATCH_PAGE_ADDRESS;
+         params.xfb_prims_written_counter[i] = AGX_SCRATCH_PAGE_ADDRESS;
          params.prims_generated_counter[i] = AGX_SCRATCH_PAGE_ADDRESS;
       }
 

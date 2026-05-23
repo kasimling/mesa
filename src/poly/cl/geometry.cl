@@ -312,6 +312,7 @@ poly_pre_gs(global struct poly_geometry_params *p, uint streams,
                                                  prefix_sum, unrolled_in_prims);
 
       *(p->prims_generated_counter[i]) += in_prims[i];
+      *(p->xfb_prims_generated_counter[i]) += in_prims[i];
    }
 
    uint4 prims = in_prims;
@@ -332,7 +333,7 @@ poly_pre_gs(global struct poly_geometry_params *p, uint streams,
          p->xfb_verts[i] = prims[i] * vertices_per_prim;
 
          *(p->xfb_overflow[i]) += (bool)overflow[i];
-         *(p->xfb_prims_generated_counter[i]) += prims[i];
+         *(p->xfb_prims_written_counter[i]) += prims[i];
       }
 
       *(p->xfb_any_overflow) += any(overflow);
