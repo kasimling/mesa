@@ -883,6 +883,7 @@ prepare_poly(struct panvk_cmd_buffer *cmdbuf,
    for (unsigned i = 0; i < ARRAY_SIZE(gp->prims_generated_counter); i++) {
       gp->prims_generated_counter[i] = PAN_SHADER_OOB_ADDRESS;
       gp->xfb_prims_generated_counter[i] = PAN_SHADER_OOB_ADDRESS;
+      gp->xfb_prims_written_counter[i] = PAN_SHADER_OOB_ADDRESS;
    }
 
    /* these queries are only used for gallium */
