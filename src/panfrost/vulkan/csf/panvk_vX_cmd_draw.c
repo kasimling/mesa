@@ -3686,11 +3686,21 @@ panvk_cmd_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
    if (result != VK_SUCCESS)
       return;
 
+   const struct panvk_shader *gs = cmdbuf->state.gfx.gs.shader;
+   assert(cmdbuf->state.gfx.tcs.shader == NULL);
+
    /* If there's no hardware vertex shader, then nothing is going to generate
     * positions so it's all undefined and we can skip the draw.  If we don't,
     * we can end up in a situation where the IDVS faults.
     */
    if (!panvk_priv_mem_check_alloc(get_hw_vs(cmdbuf)->spd))
+      return;
+
+   /* Unless we have a multistream GS, all vertices are output to stream 0,
+    * and we can skip draws with nonzero rasterization stream unless there are
+    * other side effects. */
+   if (cmdbuf->vk.dynamic_graphics_state.rs.rasterization_stream != 0 &&
+       (gs && !gs->gs.gs_info.multistream && !cmdbuf->state.gfx.xfb.active))
       return;
 
    if (cmdbuf->state.gfx.vi.base_instance != draw.instance.base) {
@@ -3728,9 +3738,6 @@ panvk_cmd_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
    /* For indirect draws, we need to patch the descriptors we just emitted */
    if (draw.indirect.buffer_dev_addr)
       patch_vs_attribs(cmdbuf, &draw);
-
-   const struct panvk_shader *gs = cmdbuf->state.gfx.gs.shader;
-   assert(cmdbuf->state.gfx.tcs.shader == NULL);
 
    if (gs) {
       /* The polygon pipeline requires restarts to be unrolled first */

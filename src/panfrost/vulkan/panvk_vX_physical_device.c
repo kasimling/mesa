@@ -18,6 +18,8 @@
 #include "vk_limits.h"
 #include "vk_shader_module.h"
 
+#include "poly/geometry.h"
+
 #include "panvk_instance.h"
 #include "panvk_buffer.h"
 #include "panvk_cmd_draw.h"
@@ -514,7 +516,7 @@ panvk_per_arch(get_physical_device_features)(
       .extendedDynamicState3ColorBlendEnable = true,
       .extendedDynamicState3ColorBlendEquation = true,
       .extendedDynamicState3ColorWriteMask = true,
-      .extendedDynamicState3RasterizationStream = false,
+      .extendedDynamicState3RasterizationStream = true,
       .extendedDynamicState3ConservativeRasterizationMode = PAN_ARCH >= 11,
       .extendedDynamicState3ExtraPrimitiveOverestimationSize = false,
       .extendedDynamicState3DepthClipEnable = true,
@@ -639,7 +641,7 @@ panvk_per_arch(get_physical_device_features)(
 
       /* VK_EXT_transform_feedback */
       .transformFeedback = instance->enable_gs_xfb,
-      .geometryStreams = false, /* TODO */
+      .geometryStreams = instance->enable_gs_xfb,
 
       /* VK_EXT_rgba10x6_formats */
       .formatRgba10x6WithoutYCbCrSampler = PAN_ARCH >= 11,
@@ -1275,7 +1277,7 @@ panvk_per_arch(get_physical_device_properties)(
       properties->maxGeometryTotalOutputComponents = 1024;
 
       /* VK_EXT_transform_feedback */
-      properties->maxTransformFeedbackStreams = 1;
+      properties->maxTransformFeedbackStreams = POLY_MAX_VERTEX_STREAMS;
       properties->maxTransformFeedbackBuffers = MAX_XFB_BUFFERS;
       properties->maxTransformFeedbackBufferSize = panvk_get_max_buffer_size(device);
       properties->maxTransformFeedbackStreamDataSize = 2048;
@@ -1283,7 +1285,7 @@ panvk_per_arch(get_physical_device_properties)(
       properties->maxTransformFeedbackBufferDataStride = 2048;
       properties->transformFeedbackQueries = false;
       properties->transformFeedbackStreamsLinesTriangles = true;
-      properties->transformFeedbackRasterizationStreamSelect = false; /* TODO depends on streams */
+      properties->transformFeedbackRasterizationStreamSelect = true;
       properties->transformFeedbackDraw = false;
    }
 

@@ -941,6 +941,10 @@ panvk_per_arch(cmd_prepare_draw_sysvals)(struct panvk_cmd_buffer *cmdbuf,
       set_gfx_sysval(cmdbuf, dirty_sysvals, poly.provoking_vertex, provoking);
    }
 
+   if (dyn_gfx_state_dirty(cmdbuf, RS_RASTERIZATION_STREAM))
+      set_gfx_sysval(cmdbuf, dirty_sysvals, poly.rasterization_stream,
+                     cmdbuf->vk.dynamic_graphics_state.rs.rasterization_stream);
+
 #if PAN_ARCH < 9
    struct panvk_descriptor_state *desc_state = &cmdbuf->state.gfx.desc_state;
    struct panvk_shader_desc_state *vs_desc_state = &cmdbuf->state.gfx.vs.desc;
