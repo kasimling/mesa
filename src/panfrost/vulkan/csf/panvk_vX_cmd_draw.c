@@ -881,7 +881,7 @@ prepare_poly(struct panvk_cmd_buffer *cmdbuf,
 
    for (unsigned i = 0; i < ARRAY_SIZE(gp->prims_generated_counter); i++) {
       bool xfb = cmdbuf->state.gfx.xfb.active;
-      struct panvk_xfb_query_state *xfb_query = &cmdbuf->state.gfx.xfb_query;
+      struct panvk_xfb_query_state *xfb_query = &cmdbuf->state.gfx.xfb_query[i];
 
       /* TODO: primitives generated query */
       gp->prims_generated_counter[i] = PAN_SHADER_OOB_ADDRESS;
@@ -3311,8 +3311,15 @@ launch_gs(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
                        (draw.indirect.draw_count != 1 ||
                         draw.indirect.count_buffer_dev_addr != 0);
    bool empty_hw_vs = !panvk_priv_mem_check_alloc(get_hw_vs(cmdbuf)->spd);
-   bool has_gs_queries = cmdbuf->state.gfx.xfb_query.ptr &&
-                         cmdbuf->state.gfx.xfb.active;
+   bool has_gs_queries = false;
+   for (unsigned i = 0; i < POLY_MAX_VERTEX_STREAMS; i++) {
+      /* Unless we have a multistream GS, all vertices output to stream 0 */
+      if (i == 0 || gsi->multistream) {
+         has_gs_queries = has_gs_queries ||
+            (cmdbuf->state.gfx.xfb.active &&
+             cmdbuf->state.gfx.xfb_query[i].ptr);
+      }
+   }
 
    assert(!is_multiview); /* TODO: multiview */
 
@@ -3995,16 +4002,25 @@ panvk_cmd_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info draw)
     * draw up to that point before aborting.  If not, we can abort early.
     */
    bool empty_hw_vs = !panvk_priv_mem_check_alloc(get_hw_vs(cmdbuf)->spd);
-   bool has_gs_queries = cmdbuf->state.gfx.xfb_query.ptr &&
-                         cmdbuf->state.gfx.xfb.active;
+   bool has_gs_queries = false;
+   for (unsigned i = 0; i < POLY_MAX_VERTEX_STREAMS; i++) {
+      /* Unless we have a multistream GS, all vertices output to stream 0 */
+      if (i == 0 || (gs && gs->gs.gs_info.multistream)) {
+         has_gs_queries = has_gs_queries ||
+            (cmdbuf->state.gfx.xfb.active &&
+             cmdbuf->state.gfx.xfb_query[i].ptr);
+      }
+   }
    if (empty_hw_vs && !has_gs_queries)
       return;
 
    /* Unless we have a multistream GS, all vertices are output to stream 0,
     * and we can skip draws with nonzero rasterization stream unless there are
     * other side effects. */
+   /* TODO: skip early if we have queries but don't need the draw */
    if (cmdbuf->vk.dynamic_graphics_state.rs.rasterization_stream != 0 &&
-       (gs && !gs->gs.gs_info.multistream && !cmdbuf->state.gfx.xfb.active))
+       (gs && !gs->gs.gs_info.multistream && !cmdbuf->state.gfx.xfb.active &&
+        !has_gs_queries))
       return;
 
    if (cmdbuf->state.gfx.vi.base_instance != draw.instance.base) {

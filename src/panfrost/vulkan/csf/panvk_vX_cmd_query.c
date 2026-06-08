@@ -762,12 +762,12 @@ panvk_cmd_end_prims_generated_query(
 static void
 panvk_cmd_begin_xfb_query(
    struct panvk_cmd_buffer *cmd, struct panvk_query_pool *pool, uint32_t query,
-   VkQueryControlFlags flags)
+   VkQueryControlFlags flags, uint32_t index)
 {
    uint64_t report_addr = panvk_query_report_dev_addr(pool, query);
 
-   cmd->state.gfx.xfb_query.ptr = report_addr;
-   cmd->state.gfx.xfb_query.syncobj =
+   cmd->state.gfx.xfb_query[index].ptr = report_addr;
+   cmd->state.gfx.xfb_query[index].syncobj =
       panvk_query_available_dev_addr(pool, query);
 
    /* From the Vulkan spec:
@@ -790,10 +790,11 @@ panvk_cmd_begin_xfb_query(
 
 static void
 panvk_cmd_end_xfb_query(
-   struct panvk_cmd_buffer *cmd, struct panvk_query_pool *pool, uint32_t query)
+   struct panvk_cmd_buffer *cmd, struct panvk_query_pool *pool, uint32_t query,
+   uint32_t index)
 {
-   cmd->state.gfx.xfb_query.ptr = 0;
-   cmd->state.gfx.xfb_query.syncobj = 0;
+   cmd->state.gfx.xfb_query[index].ptr = 0;
+   cmd->state.gfx.xfb_query[index].syncobj = 0;
 
    struct cs_builder *b = panvk_get_cs_builder(cmd, PANVK_SUBQUEUE_COMPUTE);
    struct cs_index query_syncobj = cs_scratch_reg64(b, 0);
@@ -854,20 +855,19 @@ panvk_per_arch(CmdBeginQueryIndexedEXT)(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(panvk_cmd_buffer, cmd, commandBuffer);
    VK_FROM_HANDLE(panvk_query_pool, pool, queryPool);
 
-   /* TODO: transform feedback */
-   assert(index == 0);
-
    switch (pool->vk.query_type) {
    case VK_QUERY_TYPE_OCCLUSION: {
+      assert(index == 0);
       panvk_cmd_begin_occlusion_query(cmd, pool, query, flags);
       break;
    }
    case VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT: {
+      assert(index == 0);
       panvk_cmd_begin_prims_generated_query(cmd, pool, query, flags);
       break;
    }
    case VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT: {
-      panvk_cmd_begin_xfb_query(cmd, pool, query, flags);
+      panvk_cmd_begin_xfb_query(cmd, pool, query, flags, index);
       break;
    }
    default:
@@ -883,20 +883,19 @@ panvk_per_arch(CmdEndQueryIndexedEXT)(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(panvk_cmd_buffer, cmd, commandBuffer);
    VK_FROM_HANDLE(panvk_query_pool, pool, queryPool);
 
-   /* TODO: transform feedback */
-   assert(index == 0);
-
    switch (pool->vk.query_type) {
    case VK_QUERY_TYPE_OCCLUSION: {
+      assert(index == 0);
       panvk_cmd_end_occlusion_query(cmd, pool, query);
       break;
    }
    case VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT: {
+      assert(index == 0);
       panvk_cmd_end_prims_generated_query(cmd, pool, query);
       break;
    }
    case VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT: {
-      panvk_cmd_end_xfb_query(cmd, pool, query);
+      panvk_cmd_end_xfb_query(cmd, pool, query, index);
       break;
    }
    default:
