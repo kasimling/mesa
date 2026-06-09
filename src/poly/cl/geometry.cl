@@ -315,8 +315,15 @@ poly_pre_gs(global struct poly_geometry_params *p, uint streams,
       *(p->xfb_prims_generated_counter[i]) += in_prims[i];
    }
 
+   uint emitted_prims = in_prims[0] + in_prims[1] + in_prims[2] + in_prims[3];
+
+   /* Streams without an xfb buffer do not contribute to xfb counters */
    uint4 prims = in_prims;
-   uint emitted_prims = prims[0] + prims[1] + prims[2] + prims[3];
+   uint xfb_streams = 0;
+   poly_foreach_xfb(buffers_written, i)
+      xfb_streams |= BITFIELD_BIT(buffer_to_stream[i]);
+   poly_foreach_xfb(~xfb_streams, i)
+      prims[i] = 0;
 
    if (buffers_written) {
       poly_foreach_xfb(buffers_written, i) {
