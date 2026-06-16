@@ -210,7 +210,7 @@ static const driOptionDescription panvk_dri_options[] = {
       DRI_CONF_PAN_FRAGMENT_CORE_MASK(~0ull)
       DRI_CONF_PAN_ENABLE_VERTEX_PIPELINE_STORES_ATOMICS(false)
       DRI_CONF_PAN_FORCE_ENABLE_SHADER_ATOMICS(false)
-      DRI_CONF_PANVK_ENABLE_GS_XFB(false)
+      DRI_CONF_PANVK_ENABLE_GS_XFB(true)
    DRI_CONF_SECTION_END
 };
 
