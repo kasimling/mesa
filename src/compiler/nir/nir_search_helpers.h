@@ -657,13 +657,21 @@ is_only_used_by_ior(const nir_alu_instr *instr)
 static inline bool
 only_lower_8_bits_used(const nir_alu_instr *instr)
 {
-   return (nir_def_bits_used(&instr->def) & ~0xffull) == 0;
+   if (instr->def.num_components > 1)
+      return false;
+
+   return (nir_def_bits_used(nir_get_scalar((nir_def*)&instr->def, 0)) &
+           ~0xffull) == 0;
 }
 
 static inline bool
 only_lower_16_bits_used(const nir_alu_instr *instr)
 {
-   return (nir_def_bits_used(&instr->def) & ~0xffffull) == 0;
+   if (instr->def.num_components > 1)
+      return false;
+
+   return (nir_def_bits_used(nir_get_scalar((nir_def*)&instr->def, 0)) &
+           ~0xffffull) == 0;
 }
 
 /**
@@ -921,6 +929,7 @@ RELATION(a_number, FP_CLASS_NAN)
 RELATION(finite, FP_CLASS_ANY_INF | FP_CLASS_NAN)
 RELATION(finite_not_zero, FP_CLASS_ANY_INF | FP_CLASS_NAN | FP_CLASS_ANY_ZERO)
 RELATION(integral, FP_CLASS_NON_INTEGRAL)
+RELATION(integral_not_negative, FP_CLASS_ANY_NEG | FP_CLASS_NON_INTEGRAL)
 
 static inline bool
 compare_component(const nir_alu_instr *instr, unsigned src, unsigned component,

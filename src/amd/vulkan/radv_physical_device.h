@@ -25,10 +25,14 @@
 #include "nir_shader_compiler_options.h"
 
 #include "vk_physical_device.h"
+#include "vk_sync.h"
+#include "vk_sync_timeline.h"
 
 #ifndef _WIN32
 #include <xf86drm.h>
 #endif
+
+typedef struct ac_drm_device ac_drm_device;
 
 struct radv_binning_settings {
    unsigned context_states_per_bin;    /* allowed range: [1, 6] */
@@ -63,10 +67,15 @@ enum radv_gfx12_hiz_wa {
    RADV_GFX12_HIZ_WA_FULL,
 };
 
+enum radv_drm_device_type {
+   RADV_DRM_DEVICE_AMDGPU,
+   RADV_DRM_DEVICE_AMDGPU_VPIPE,
+   RADV_DRM_DEVICE_VIRTIO,
+};
+
 struct radv_physical_device {
    struct vk_physical_device vk;
 
-   struct radeon_winsys *ws;
    struct radeon_info info;
    char name[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE];
    char marketing_name[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE];
@@ -79,8 +88,8 @@ struct radv_physical_device {
 
    struct ac_addrlib *addrlib;
 
-   int local_fd;
-   int master_fd;
+   int wsi_master_fd;
+   int wsi_syncobj_fd;
    struct wsi_device wsi_device;
 
    /* Whether DCC should be enabled for MSAA textures. */
@@ -153,6 +162,9 @@ struct radv_physical_device {
    enum radv_queue_family vk_queue_to_radv[RADV_MAX_QUEUE_FAMILIES];
    uint32_t num_queues;
 
+   /* Mask of supported global queue priorities. */
+   uint32_t global_priority_mask;
+
    uint32_t gs_table_depth;
 
    struct ac_task_info task_info;
@@ -165,13 +177,6 @@ struct radv_physical_device {
    uint32_t num_perfcounters;
    struct radv_perfcounter_desc *perfcounters;
 
-   struct {
-      unsigned data0;
-      unsigned data1;
-      unsigned data2;
-      unsigned cmd;
-      unsigned cntl;
-   } vid_dec_reg;
    enum amd_ip_type vid_decode_ip;
    rvcn_enc_cmd_t vcn_enc_cmds;
    enum radv_video_enc_hw_ver enc_hw_ver;
@@ -190,6 +195,17 @@ struct radv_physical_device {
 
       uint32_t max_array_layers;
    } image_props;
+
+   struct vk_sync_type syncobj_sync_type;
+   struct vk_sync_timeline_type emulated_timeline_sync_type;
+   const struct vk_sync_type *sync_types[3];
+
+   /* Type of DRM device. */
+   enum radv_drm_device_type drm_device_type;
+
+   /* Cached device used to query heap info. */
+   simple_mtx_t drm_device_mtx;
+   ac_drm_device *drm_device;
 };
 
 VK_DEFINE_HANDLE_CASTS(radv_physical_device, vk.base, VkPhysicalDevice, VK_OBJECT_TYPE_PHYSICAL_DEVICE)
@@ -255,10 +271,6 @@ bool radv_is_dcc_disabled(const struct radv_physical_device *pdev);
 bool radv_are_dcc_stores_disabled(const struct radv_physical_device *pdev);
 
 bool radv_are_dcc_mips_disabled(const struct radv_physical_device *pdev);
-
-uint32_t radv_find_memory_index(const struct radv_physical_device *pdev, VkMemoryPropertyFlags flags);
-
-VkResult create_null_physical_device(struct vk_instance *vk_instance);
 
 VkResult create_drm_physical_device(struct vk_instance *vk_instance, struct _drmDevice *device,
                                     struct vk_physical_device **out);

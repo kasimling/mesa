@@ -968,6 +968,12 @@ nir_lower_io(nir_shader *shader, nir_variable_mode modes,
    return progress;
 }
 
+#define IMG_CASE(name)                          \
+   case nir_intrinsic_image_##name:             \
+   case nir_intrinsic_image_deref_##name:       \
+   case nir_intrinsic_bindless_image_##name:    \
+   case nir_intrinsic_image_heap_##name
+
 /**
  * Return the offset source number for a load/store intrinsic or -1 if there's no offset.
  */
@@ -987,10 +993,12 @@ nir_get_io_offset_src_number(const nir_intrinsic_instr *instr)
    case nir_intrinsic_load_push_constant:
    case nir_intrinsic_load_kernel_input:
    case nir_intrinsic_load_global:
+   case nir_intrinsic_load_global_intel:
    case nir_intrinsic_load_global_2x32:
    case nir_intrinsic_load_global_constant:
    case nir_intrinsic_load_global_etna:
    case nir_intrinsic_load_global_nv:
+   case nir_intrinsic_load_global_transpose_amd:
    case nir_intrinsic_load_scratch:
    case nir_intrinsic_load_scratch_nv:
    case nir_intrinsic_load_scratch_intel:
@@ -1031,6 +1039,7 @@ nir_get_io_offset_src_number(const nir_intrinsic_instr *instr)
    case nir_intrinsic_load_per_primitive_output:
    case nir_intrinsic_load_interpolated_input:
    case nir_intrinsic_load_global_amd:
+   case nir_intrinsic_load_global_tr_amd:
    case nir_intrinsic_load_global_bounded:
    case nir_intrinsic_load_global_constant_offset:
    case nir_intrinsic_load_global_constant_bounded:
@@ -1041,6 +1050,7 @@ nir_get_io_offset_src_number(const nir_intrinsic_instr *instr)
    case nir_intrinsic_store_shared_nv:
    case nir_intrinsic_store_task_payload:
    case nir_intrinsic_store_global:
+   case nir_intrinsic_store_global_intel:
    case nir_intrinsic_store_global_2x32:
    case nir_intrinsic_store_global_etna:
    case nir_intrinsic_store_global_nv:
@@ -1062,6 +1072,14 @@ nir_get_io_offset_src_number(const nir_intrinsic_instr *instr)
    case nir_intrinsic_store_shared2_amd:
    case nir_intrinsic_store_shared_ir3:
    case nir_intrinsic_load_ssbo_intel:
+   IMG_CASE(load):
+   IMG_CASE(store):
+   IMG_CASE(sparse_load):
+   IMG_CASE(atomic):
+   IMG_CASE(atomic_swap):
+   IMG_CASE(texel_address):
+   IMG_CASE(samples_identical):
+   IMG_CASE(fragment_mask_load_amd):
       return 1;
    case nir_intrinsic_store_ssbo:
    case nir_intrinsic_store_per_vertex_output:
@@ -1102,12 +1120,6 @@ nir_get_io_offset_src(nir_intrinsic_instr *instr)
    const int idx = nir_get_io_offset_src_number(instr);
    return idx >= 0 ? &instr->src[idx] : NULL;
 }
-
-#define IMG_CASE(name)                          \
-   case nir_intrinsic_image_##name:             \
-   case nir_intrinsic_image_deref_##name:       \
-   case nir_intrinsic_bindless_image_##name:    \
-   case nir_intrinsic_image_heap_##name
 
 /**
  * Return the uniform offset source number for a load/store intrinsic or -1 if there's no offset.
@@ -1161,6 +1173,7 @@ nir_get_io_index_src_number(const nir_intrinsic_instr *instr)
    case nir_intrinsic_load_per_primitive_output:
    case nir_intrinsic_load_interpolated_input:
    case nir_intrinsic_load_global_amd:
+   case nir_intrinsic_load_global_tr_amd:
    case nir_intrinsic_global_atomic_amd:
    case nir_intrinsic_global_atomic_swap_amd:
    case nir_intrinsic_ldc_nv:
@@ -1171,6 +1184,7 @@ nir_get_io_index_src_number(const nir_intrinsic_instr *instr)
    case nir_intrinsic_load_ssbo_uniform_block_intel:
    case nir_intrinsic_ssbo_atomic:
    case nir_intrinsic_ssbo_atomic_swap:
+   case nir_intrinsic_load_ssbo_address:
    IMG_CASE(load):
    IMG_CASE(store):
    IMG_CASE(sparse_load):
@@ -1221,6 +1235,7 @@ nir_get_io_data_src_number(const nir_intrinsic_instr *intr)
    case nir_intrinsic_store_shared_nv:
    case nir_intrinsic_store_task_payload:
    case nir_intrinsic_store_global:
+   case nir_intrinsic_store_global_intel:
    case nir_intrinsic_store_global_block_intel:
    case nir_intrinsic_store_global_amd:
    case nir_intrinsic_store_global_2x32:

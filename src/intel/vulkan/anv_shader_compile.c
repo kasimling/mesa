@@ -276,6 +276,12 @@ anv_shader_init_uuid(struct anv_physical_device *device)
    const bool cbv_push_buffer = device->instance->drirc.perf.promote_cbv_push_buffer;
    _mesa_blake3_update(&ctx, &cbv_push_buffer, sizeof(cbv_push_buffer));
 
+   const bool fs_sample_d_wa = device->instance->drirc.debug.fs_sampler_undef_derivatives_workaround;
+   _mesa_blake3_update(&ctx, &fs_sample_d_wa, sizeof(fs_sample_d_wa));
+
+   const bool slm_robust = device->instance->drirc.debug.slm_robust_vectorization;
+   _mesa_blake3_update(&ctx, &slm_robust, sizeof(slm_robust));
+
    uint8_t blake3[BLAKE3_KEY_LEN];
    _mesa_blake3_final(&ctx, blake3);
    memcpy(device->shader_binary_uuid, blake3, sizeof(device->shader_binary_uuid));
@@ -461,7 +467,13 @@ populate_gs_prog_key(struct brw_gs_prog_key *key,
                      const struct vk_graphics_pipeline_state *state,
                      VkShaderStageFlags link_stages)
 {
+   const struct anv_physical_device *pdevice =
+      container_of(device, const struct anv_physical_device, vk);
+
    populate_base_gfx_prog_key(&key->base, device, rs, state, link_stages);
+
+   if (pdevice->instance->drirc.debug.slm_robust_vectorization)
+      key->base.robust_flags |= BRW_ROBUSTNESS_SLM;
 }
 
 static void
@@ -471,7 +483,13 @@ populate_task_prog_key(struct brw_task_prog_key *key,
                        const struct vk_graphics_pipeline_state *state,
                        VkShaderStageFlags link_stages)
 {
+   const struct anv_physical_device *pdevice =
+      container_of(device, const struct anv_physical_device, vk);
+
    populate_base_gfx_prog_key(&key->base, device, rs, state, link_stages);
+
+   if (pdevice->instance->drirc.debug.slm_robust_vectorization)
+      key->base.robust_flags |= BRW_ROBUSTNESS_SLM;
 }
 
 static void
@@ -600,12 +618,6 @@ populate_fs_prog_key(struct brw_fs_prog_key *key,
          BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_RASTERIZATION_SAMPLES) ?
          INTEL_SOMETIMES :
          state->ms->rasterization_samples > 1 ? INTEL_ALWAYS : INTEL_NEVER;
-      key->persample_interp =
-         BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_RASTERIZATION_SAMPLES) ?
-         INTEL_SOMETIMES :
-         (state->ms->sample_shading_enable &&
-          (state->ms->min_sample_shading * state->ms->rasterization_samples) > 1) ?
-         INTEL_ALWAYS : INTEL_NEVER;
       key->alpha_to_coverage =
          BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_ALPHA_TO_COVERAGE_ENABLE) ?
          INTEL_SOMETIMES :
@@ -620,8 +632,27 @@ populate_fs_prog_key(struct brw_fs_prog_key *key,
 
       key->alpha_to_coverage = INTEL_SOMETIMES;
       key->multisample_fbo = INTEL_SOMETIMES;
-      key->persample_interp = INTEL_SOMETIMES;
    }
+
+   /* Per sample interpolation is about the only thing we can also determine
+    * using the create info. With GPL, it is required to be specified if
+    * sample shading is to be enabled. So if we can't to that field, it means
+    * it's disabled.
+    *
+    * In the case where MSAA is dynamic we assume persample interpolation is
+    * active if enabled, otherwise we can double check the number of samples
+    * matches the requirement for it.
+    *
+    * With ESO, there is no way to enable/disable this at the API level, it's
+    * only possible with shader code (the backend will deal with this by
+    * looking at shader_info).
+    */
+   key->persample_interp =
+      key->multisample_fbo != INTEL_NEVER &&
+      state != NULL && state->ms != NULL &&
+      state->ms->sample_shading_enable &&
+      (BITSET_TEST(state->dynamic, MESA_VK_DYNAMIC_MS_RASTERIZATION_SAMPLES) ||
+       (state->ms->min_sample_shading * state->ms->rasterization_samples) > 1);
 
    if (pdevice->info.verx10 >= 200) {
       if (state != NULL && state->rs != NULL) {
@@ -655,11 +686,6 @@ populate_fs_prog_key(struct brw_fs_prog_key *key,
       (link_stages & VK_SHADER_STAGE_MESH_BIT_EXT) ? INTEL_ALWAYS :
       pdevice->info.has_mesh_shading ? INTEL_SOMETIMES : INTEL_NEVER;
 
-   if (state && state->ms) {
-      key->min_sample_shading = state->ms->min_sample_shading;
-      key->api_sample_shading = state->ms->sample_shading_enable;
-   }
-
    key->coarse_pixel = pipeline_has_coarse_pixel(state);
 }
 
@@ -673,6 +699,9 @@ populate_cs_prog_key(struct brw_cs_prog_key *key,
       container_of(device, const struct anv_physical_device, vk);
 
    populate_base_prog_key(&key->base, device, rs);
+
+   if (pdevice->instance->drirc.debug.slm_robust_vectorization)
+      key->base.robust_flags |= BRW_ROBUSTNESS_SLM;
 
    key->base.divergent_atomics_flags |=
       pdevice->instance->drirc.perf.opt_divergent_atomics_compute_only;
@@ -1000,26 +1029,23 @@ populate_compile_params_mesh(union brw_any_compile_params *params,
 
 static void
 populate_compile_params_fs(union brw_any_compile_params *params,
-                           const struct intel_device_info *devinfo,
-                           struct anv_shader_data *shader_data)
+                           struct anv_shader_data *shader_data,
+                           struct anv_shader_data *prev_shader_data)
 {
-   nir_shader *nir = shader_data->info->nir;
-
-   /* When using Primitive Replication for multiview, each view gets its own
-    * position slot.
-    */
-   uint32_t pos_slots = shader_data->use_primitive_replication ?
-      MAX2(1, util_bitcount(shader_data->key.base.view_mask)) : 1;
-
-   /* TODO: Should we find a way to pass this to brw_compile? */
-   struct intel_vue_map prev_vue_map;
-   brw_compute_vue_map(devinfo,
-                       &prev_vue_map,
-                       nir->info.inputs_read,
-                       nir->info.separate_shader,
-                       pos_slots);
-
-   params->fs.mue_map = shader_data->mue_map;
+   if (prev_shader_data) {
+      switch (prev_shader_data->info->stage) {
+      case MESA_SHADER_VERTEX:
+      case MESA_SHADER_TESS_EVAL:
+      case MESA_SHADER_GEOMETRY:
+         params->fs.vue_map = &prev_shader_data->prog_data.vue.vue_map;
+         break;
+      case MESA_SHADER_MESH:
+         params->fs.mue_map = shader_data->mue_map;
+         break;
+      default:
+         break;
+      }
+   }
 
    params->fs.allow_spilling = true;
    params->fs.max_polygons = UCHAR_MAX;
@@ -1259,7 +1285,8 @@ anv_shader_lower_nir(struct anv_device *device,
    nir_shader *nir = shader_data->info->nir;
 
    /* Workaround for apps that need fp64 support */
-   if (device->fp64_nir) {
+   if (!devinfo->has_64bit_float && (nir->info.bit_sizes_float & 64) &&
+       pdevice->instance->drirc.debug.fp64_emu) {
       nir_shader *fp64_nir = anv_ensure_fp64_shader(device);
 
       NIR_PASS(_, nir, nir_lower_doubles, fp64_nir,
@@ -1449,6 +1476,17 @@ anv_shader_lower_nir(struct anv_device *device,
                &shader_data->bind_map, &shader_data->push_map, mem_ctx);
    }
 
+   /* Now that we're done computing the surface and sampler tables of the bind
+    * map, hash them. This lets us quickly determine if the actual mapping has
+    * changed and not just a no-op pipeline change.
+    */
+   _mesa_blake3_compute(shader_data->bind_map.surface_to_descriptor,
+                        shader_data->bind_map.surface_count * sizeof(struct anv_pipeline_binding),
+                        shader_data->bind_map.surface_blake3);
+   _mesa_blake3_compute(shader_data->bind_map.sampler_to_descriptor,
+                        shader_data->bind_map.sampler_count * sizeof(struct anv_pipeline_binding),
+                        shader_data->bind_map.sampler_blake3);
+
    NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_ubo,
             anv_nir_ubo_addr_format(pdevice, shader_data->key.base.robust_flags));
    NIR_PASS(_, nir, nir_lower_explicit_io, nir_var_mem_ssbo,
@@ -1512,6 +1550,10 @@ anv_shader_lower_nir(struct anv_device *device,
       NIR_PASS(_, nir, intel_nir_cleanup_resource_intel);
       NIR_PASS(_, nir, nir_opt_dce);
    }
+
+   if (nir->info.stage == MESA_SHADER_FRAGMENT &&
+       pdevice->instance->drirc.debug.fs_sampler_undef_derivatives_workaround)
+      NIR_PASS(_, nir, brw_nir_apply_sampler_undef_derivatives_workaround);
 
    if (mesa_shader_stage_uses_workgroup(nir->info.stage)) {
       NIR_PASS(_, nir, nir_lower_vars_to_explicit_types,
@@ -2051,7 +2093,7 @@ anv_shader_compile(struct vk_device *vk_device,
                                       prev_shader_data);
          break;
       case MESA_SHADER_FRAGMENT:
-         populate_compile_params_fs(&params, devinfo, shader_data);
+         populate_compile_params_fs(&params, shader_data, prev_shader_data);
          break;
       case MESA_SHADER_RAYGEN:
       case MESA_SHADER_ANY_HIT:
@@ -2070,13 +2112,14 @@ anv_shader_compile(struct vk_device *vk_device,
          struct jay_shader_bin *bin =
             jay_compile(devinfo, mem_ctx, nir,
                         (union brw_any_prog_data *)compile_params->prog_data,
-                        (union brw_any_prog_key *)compile_params->key);
+                        (union brw_any_prog_key *)compile_params->key,
+                        shader_data->archiver);
          shader_data->code = bin->kernel;
+         shader_data->stats[0] = bin->stats;
 
          if (mesa_shader_stage_uses_workgroup(nir->info.stage)) {
             struct brw_cs_prog_data *prog_data =
                (struct brw_cs_prog_data *)compile_params->prog_data;
-            shader_data->stats[0] = bin->stats;
             prog_data->local_size[0] = nir->info.workgroup_size[0];
             prog_data->local_size[1] = nir->info.workgroup_size[1];
             prog_data->local_size[2] = nir->info.workgroup_size[2];

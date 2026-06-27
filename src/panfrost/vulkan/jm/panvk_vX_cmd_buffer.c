@@ -358,17 +358,6 @@ panvk_per_arch(CmdPipelineBarrier2)(VkCommandBuffer commandBuffer,
       panvk_per_arch(cmd_close_batch)(cmdbuf);
       panvk_per_arch(cmd_open_batch)(cmdbuf);
    }
-
-   for (uint32_t i = 0; i < pDependencyInfo->imageMemoryBarrierCount; i++) {
-      const VkImageMemoryBarrier2 *barrier = &pDependencyInfo->pImageMemoryBarriers[i];
-
-      panvk_per_arch(cmd_transition_image_layout)(commandBuffer, barrier);
-   }
-
-   /* If we had any layout transition dispatches, the batch will be closed at
-    * this point, therefore establishing the sync between itself and the
-    * commands that follow.
-    */
 }
 
 static void
@@ -438,8 +427,14 @@ panvk_create_cmdbuf(struct vk_command_pool *vk_pool, VkCommandBufferLevel level,
    if (!cmdbuf)
       return panvk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
 
-   VkResult result = vk_command_buffer_init(
-      &pool->vk, &cmdbuf->vk, &panvk_per_arch(cmd_buffer_ops), level);
+   VkResult result = vk_command_buffer_init_with_params(
+      &cmdbuf->vk,
+      &(struct vk_command_buffer_init_params) {
+         .pool = &pool->vk,
+         .ops = &panvk_per_arch(cmd_buffer_ops),
+         .level = level,
+         .needs_cmd_queue = level == VK_COMMAND_BUFFER_LEVEL_SECONDARY,
+      });
    if (result != VK_SUCCESS) {
       vk_free(&device->vk.alloc, cmdbuf);
       return result;

@@ -87,6 +87,11 @@ make_sources_canonical(nir_builder *b, nir_alu_instr *alu, uint32_t start_idx)
       resize_bool_alu_source(b, alu, i, bit_size);
 }
 
+#define CASE_CMP(cmp)                                                          \
+   case nir_op_##cmp:                                                          \
+      opcode = nir_op_##cmp##_pan;                                             \
+      break;
+
 static bool
 lower_alu_instr(nir_builder *b, nir_alu_instr *alu)
 {
@@ -111,18 +116,6 @@ lower_alu_instr(nir_builder *b, nir_alu_instr *alu)
          return false; /* Not a boolean instruction */
       FALLTHROUGH;
 
-   case nir_op_ball_fequal2:
-   case nir_op_ball_fequal3:
-   case nir_op_ball_fequal4:
-   case nir_op_bany_fnequal2:
-   case nir_op_bany_fnequal3:
-   case nir_op_bany_fnequal4:
-   case nir_op_ball_iequal2:
-   case nir_op_ball_iequal3:
-   case nir_op_ball_iequal4:
-   case nir_op_bany_inequal2:
-   case nir_op_bany_inequal3:
-   case nir_op_bany_inequal4:
    case nir_op_ieq:
    case nir_op_ine:
       make_sources_canonical(b, alu, 0);
@@ -172,125 +165,25 @@ lower_alu_instr(nir_builder *b, nir_alu_instr *alu)
       opcode = nir_op_i2i32;
       break;
 
-   case nir_op_flt:
-      opcode = bit_size == 8 ? nir_op_flt8 : bit_size == 16 ? nir_op_flt16
-                                                            : nir_op_flt32;
-      break;
-
-   case nir_op_fge:
-      opcode = bit_size == 8 ? nir_op_fge8 : bit_size == 16 ? nir_op_fge16
-                                                            : nir_op_fge32;
-      break;
-
-   case nir_op_feq:
-      opcode = bit_size == 8 ? nir_op_feq8 : bit_size == 16 ? nir_op_feq16
-                                                            : nir_op_feq32;
-      break;
-
-   case nir_op_fneu:
-      opcode = bit_size == 8 ? nir_op_fneu8 : bit_size == 16 ? nir_op_fneu16
-                                                             : nir_op_fneu32;
-      break;
-
-   case nir_op_ilt:
-      opcode = bit_size == 8 ? nir_op_ilt8 : bit_size == 16 ? nir_op_ilt16
-                                                            : nir_op_ilt32;
-      break;
-
-   case nir_op_ige:
-      opcode = bit_size == 8 ? nir_op_ige8 : bit_size == 16 ? nir_op_ige16
-                                                            : nir_op_ige32;
-      break;
-
-   case nir_op_ieq:
-      opcode = bit_size == 8 ? nir_op_ieq8 : bit_size == 16 ? nir_op_ieq16
-                                                            : nir_op_ieq32;
-      break;
-
-   case nir_op_ine:
-      opcode = bit_size == 8 ? nir_op_ine8 : bit_size == 16 ? nir_op_ine16
-                                                            : nir_op_ine32;
-      break;
-
-   case nir_op_ult:
-      opcode = bit_size == 8 ? nir_op_ult8 : bit_size == 16 ? nir_op_ult16
-                                                            : nir_op_ult32;
-      break;
-
-   case nir_op_uge:
-      opcode = bit_size == 8 ? nir_op_uge8 : bit_size == 16 ? nir_op_uge16
-                                                            : nir_op_uge32;
-      break;
-
-   case nir_op_ball_fequal2:
-      opcode = bit_size == 8 ? nir_op_b8all_fequal2 : bit_size == 16 ? nir_op_b16all_fequal2
-                                                                     : nir_op_b32all_fequal2;
-      break;
-
-   case nir_op_ball_fequal3:
-      opcode = bit_size == 8 ? nir_op_b8all_fequal3 : bit_size == 16 ? nir_op_b16all_fequal3
-                                                                     : nir_op_b32all_fequal3;
-      break;
-
-   case nir_op_ball_fequal4:
-      opcode = bit_size == 8 ? nir_op_b8all_fequal4 : bit_size == 16 ? nir_op_b16all_fequal4
-                                                                     : nir_op_b32all_fequal4;
-      break;
-
-   case nir_op_bany_fnequal2:
-      opcode = bit_size == 8 ? nir_op_b8any_fnequal2 : bit_size == 16 ? nir_op_b16any_fnequal2
-                                                                      : nir_op_b32any_fnequal2;
-      break;
-
-   case nir_op_bany_fnequal3:
-      opcode = bit_size == 8 ? nir_op_b8any_fnequal3 : bit_size == 16 ? nir_op_b16any_fnequal3
-                                                                      : nir_op_b32any_fnequal3;
-      break;
-
-   case nir_op_bany_fnequal4:
-      opcode = bit_size == 8 ? nir_op_b8any_fnequal4 : bit_size == 16 ? nir_op_b16any_fnequal4
-                                                                      : nir_op_b32any_fnequal4;
-      break;
-
-   case nir_op_ball_iequal2:
-      opcode = bit_size == 8 ? nir_op_b8all_iequal2 : bit_size == 16 ? nir_op_b16all_iequal2
-                                                                     : nir_op_b32all_iequal2;
-      break;
-
-   case nir_op_ball_iequal3:
-      opcode = bit_size == 8 ? nir_op_b8all_iequal3 : bit_size == 16 ? nir_op_b16all_iequal3
-                                                                     : nir_op_b32all_iequal3;
-      break;
-
-   case nir_op_ball_iequal4:
-      opcode = bit_size == 8 ? nir_op_b8all_iequal4 : bit_size == 16 ? nir_op_b16all_iequal4
-                                                                     : nir_op_b32all_iequal4;
-      break;
-
-   case nir_op_bany_inequal2:
-      opcode = bit_size == 8 ? nir_op_b8any_inequal2 : bit_size == 16 ? nir_op_b16any_inequal2
-                                                                      : nir_op_b32any_inequal2;
-      break;
-
-   case nir_op_bany_inequal3:
-      opcode = bit_size == 8 ? nir_op_b8any_inequal3 : bit_size == 16 ? nir_op_b16any_inequal3
-                                                                      : nir_op_b32any_inequal3;
-      break;
-
-   case nir_op_bany_inequal4:
-      opcode = bit_size == 8 ? nir_op_b8any_inequal4 : bit_size == 16 ? nir_op_b16any_inequal4
-                                                                      : nir_op_b32any_inequal4;
-      break;
-
    case nir_op_bcsel:
-      opcode = bit_size == 8 ? nir_op_b8csel : bit_size == 16 ? nir_op_b16csel
-                                                              : nir_op_b32csel;
+      opcode = nir_op_bcsel_pan;
 
       /* The destination of the selection may have a different bit-size from
        * the bcsel condition.
        */
       bit_size = nir_src_bit_size(alu->src[1].src);
       break;
+
+      CASE_CMP(flt);
+      CASE_CMP(fge);
+      CASE_CMP(feq);
+      CASE_CMP(fneu);
+      CASE_CMP(ilt);
+      CASE_CMP(ige);
+      CASE_CMP(ieq);
+      CASE_CMP(ine);
+      CASE_CMP(ult);
+      CASE_CMP(uge);
 
    default:
       assert(alu->def.bit_size > 1);
@@ -307,6 +200,8 @@ lower_alu_instr(nir_builder *b, nir_alu_instr *alu)
 
    return true;
 }
+
+#undef CASE_CMP
 
 static bool
 lower_load_const_instr(nir_load_const_instr *load)

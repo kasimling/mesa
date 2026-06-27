@@ -191,9 +191,9 @@ gather_push_constant_info(const nir_shader *nir, const nir_intrinsic_instr *inst
    info->loads_push_constants = true;
    info->push_constant_size = MAX2(info->push_constant_size, offset + size);
 
-   if (nir_src_is_const(instr->src[0]) && instr->def.bit_size >= 32) {
+   if (nir_src_is_const(instr->src[0])) {
       const uint32_t start_dw = offset / 4;
-      const uint32_t size_dw = size / 4;
+      const uint32_t size_dw = DIV_ROUND_UP(size + offset % 4, 4);
 
       if (start_dw + size_dw <= (MAX_PUSH_CONSTANTS_SIZE / 4u)) {
          info->inline_push_constant_mask |= BITFIELD64_RANGE(start_dw, size_dw);
@@ -279,9 +279,6 @@ gather_intrinsic_info(const nir_shader *nir, const nir_intrinsic_instr *instr, s
    case nir_intrinsic_load_frag_coord_w_rcp:
       info->ps.reads_frag_coord_mask |= BITFIELD_BIT(3);
       break;
-   case nir_intrinsic_load_sample_pos:
-      info->ps.reads_sample_pos_mask |= nir_def_components_read(&instr->def);
-      break;
    case nir_intrinsic_load_push_constant:
       gather_push_constant_info(nir, instr, info);
       break;
@@ -314,6 +311,12 @@ gather_intrinsic_info(const nir_shader *nir, const nir_intrinsic_instr *instr, s
       break;
    case nir_intrinsic_begin_invocation_interlock:
       info->ps.pops = true;
+      break;
+   case nir_intrinsic_load_use_float_frag_coord_xy_amd:
+      info->ps.selects_frag_coord_xy_dynamically = true;
+      break;
+   case nir_intrinsic_load_use_sample_mask_in_amd:
+      info->ps.selects_sample_mask_in_dynamically = true;
       break;
    default:
       break;
@@ -827,7 +830,8 @@ gather_shader_info_fs(enum amd_gfx_level gfx_level, const nir_shader *nir,
         BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_SAMPLE_ID) ||
         BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_SAMPLE_POS) ||
         BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_SAMPLE_MASK_IN) ||
-        BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_HELPER_INVOCATION));
+        BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_HELPER_INVOCATION) ||
+        BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_SUBGROUP_INVOCATION));
 
    info->ps.pops_is_per_sample =
       info->ps.pops && (nir->info.fs.sample_interlock_ordered || nir->info.fs.sample_interlock_unordered);

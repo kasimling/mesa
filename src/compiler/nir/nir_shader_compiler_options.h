@@ -90,6 +90,13 @@ typedef enum {
     * convergent are divergent).
     */
    nir_divergence_across_subgroups = (1 << 12),
+
+   /* Whether local_invocation_id.z is considered uniform, to be set
+    * by the driver based on the subgroup size when the hardware's
+    * walk order guarantees that its Z component will be uniform
+    * across the desired set of invocations.
+    */
+   nir_divergence_uniform_local_invocation_id_z = (1 << 13),
 } nir_divergence_options;
 
 /** An instruction filtering callback
@@ -673,14 +680,20 @@ typedef struct nir_shader_compiler_options {
    /** Backend supports bfdot2_bfadd opcode. */
    bool has_bfdot2_bfadd;
 
-   /** Backend supports fmulz (and ffmaz if lower_ffma32=false) */
+   /** Backend supports fmulz (and fmadz if has_fmad) */
    bool has_fmulz;
 
    /**
-    * Backend supports fmulz (and ffmaz if lower_ffma32=false) but only if
+    * Backend supports fmulz (and fmadz if has_fmad) but only if
     * FLOAT_CONTROLS_DENORM_PRESERVE_FP32 is not set
     */
    bool has_fmulz_no_denorms;
+
+   /**
+    * Backend supports ffmaz but only if
+    * FLOAT_CONTROLS_DENORM_PRESERVE_FP32 is not set
+    */
+   bool has_ffmaz_no_denorms;
 
    /** Backend supports fcanonicalize, if not set fcanonicalize will be lowered
     * to fmul(a, 1.0)

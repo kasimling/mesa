@@ -838,8 +838,8 @@ def image(name, src_comp=[], extra_indices=[], **kwargs):
 image("load", src_comp=[4, 1, 1], extra_indices=[DEST_TYPE], dest_comp=0, flags=[CAN_ELIMINATE])
 image("sparse_load", src_comp=[4, 1, 1], extra_indices=[DEST_TYPE], dest_comp=0, flags=[CAN_ELIMINATE])
 image("store", src_comp=[4, 1, 0, 1], extra_indices=[SRC_TYPE])
-image("atomic",  src_comp=[4, 1, 1], dest_comp=1, extra_indices=[ATOMIC_OP])
-image("atomic_swap", src_comp=[4, 1, 1, 1], dest_comp=1, extra_indices=[ATOMIC_OP])
+image("atomic",  src_comp=[4, 1, 0], dest_comp=0, extra_indices=[ATOMIC_OP])
+image("atomic_swap", src_comp=[4, 1, 0, 0], dest_comp=0, extra_indices=[ATOMIC_OP])
 image("size",    dest_comp=0, src_comp=[1], flags=[CAN_ELIMINATE, CAN_REORDER])
 image("levels",  dest_comp=1, flags=[CAN_ELIMINATE, CAN_REORDER])
 image("samples", dest_comp=1, flags=[CAN_ELIMINATE, CAN_REORDER])
@@ -943,30 +943,34 @@ intrinsic("load_vulkan_descriptor", src_comp=[-1], dest_comp=0,
 # PCO global variants use a vec3 for the memory address and data, where component X
 # has the low 32 address bits, component Y has the high 32 address bits, and component Z
 # has the data parameter.
+#
+# Note on vector atomics:
+# These work per component, not on the whole vector at once. Each component
+# is atomic by itself. This means other threads might see some components
+# updated while others are still old.
+intrinsic("deref_atomic",  src_comp=[-1, 0], dest_comp=0, indices=[ACCESS, ATOMIC_OP])
+intrinsic("ssbo_atomic",  src_comp=[-1, 1, 0], dest_comp=0, indices=[ACCESS, ATOMIC_OP, OFFSET_SHIFT])
+intrinsic("shared_atomic",  src_comp=[1, 0], dest_comp=0, indices=[BASE, ATOMIC_OP])
+intrinsic("shared_atomic_nv",  src_comp=[1, 1, 0], dest_comp=0, indices=[BASE, ATOMIC_OP, OFFSET_SHIFT_NV])
+intrinsic("task_payload_atomic",  src_comp=[1, 0], dest_comp=0, indices=[BASE, ATOMIC_OP])
+intrinsic("global_atomic",  src_comp=[1, 0], dest_comp=0, indices=[ATOMIC_OP])
+intrinsic("global_atomic_2x32",  src_comp=[2, 0], dest_comp=0, indices=[ATOMIC_OP])
+intrinsic("global_atomic_amd",  src_comp=[1, 1, 0], dest_comp=0, indices=[BASE, ATOMIC_OP])
+intrinsic("global_atomic_agx",  src_comp=[1, 1, 0], dest_comp=0, indices=[ATOMIC_OP, SIGN_EXTEND])
+intrinsic("global_atomic_nv",  src_comp=[1, 1, 0], dest_comp=0, indices=[BASE, ATOMIC_OP])
+intrinsic("global_atomic_pco",  src_comp=[3], dest_comp=0, indices=[ATOMIC_OP], bit_sizes=[32])
 
-intrinsic("deref_atomic",  src_comp=[-1, 1], dest_comp=1, indices=[ACCESS, ATOMIC_OP])
-intrinsic("ssbo_atomic",  src_comp=[-1, 1, 1], dest_comp=1, indices=[ACCESS, ATOMIC_OP, OFFSET_SHIFT])
-intrinsic("shared_atomic",  src_comp=[1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
-intrinsic("shared_atomic_nv",  src_comp=[1, 1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP, OFFSET_SHIFT_NV])
-intrinsic("task_payload_atomic",  src_comp=[1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
-intrinsic("global_atomic",  src_comp=[1, 1], dest_comp=1, indices=[ATOMIC_OP])
-intrinsic("global_atomic_2x32",  src_comp=[2, 1], dest_comp=1, indices=[ATOMIC_OP])
-intrinsic("global_atomic_amd",  src_comp=[1, 1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
-intrinsic("global_atomic_agx",  src_comp=[1, 1, 1], dest_comp=1, indices=[ATOMIC_OP, SIGN_EXTEND])
-intrinsic("global_atomic_nv",  src_comp=[1, 1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
-intrinsic("global_atomic_pco",  src_comp=[3], dest_comp=1, indices=[ATOMIC_OP], bit_sizes=[32])
-
-intrinsic("deref_atomic_swap",  src_comp=[-1, 1, 1], dest_comp=1, indices=[ACCESS, ATOMIC_OP])
-intrinsic("ssbo_atomic_swap",  src_comp=[-1, 1, 1, 1], dest_comp=1, indices=[ACCESS, ATOMIC_OP, OFFSET_SHIFT])
-intrinsic("shared_atomic_swap",  src_comp=[1, 1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
-intrinsic("shared_atomic_swap_nv",  src_comp=[1, 1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP, OFFSET_SHIFT_NV])
-intrinsic("task_payload_atomic_swap",  src_comp=[1, 1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
-intrinsic("global_atomic_swap",  src_comp=[1, 1, 1], dest_comp=1, indices=[ATOMIC_OP])
-intrinsic("global_atomic_swap_2x32",  src_comp=[2, 1, 1], dest_comp=1, indices=[ATOMIC_OP])
-intrinsic("global_atomic_swap_amd",  src_comp=[1, 1, 1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
-intrinsic("global_atomic_swap_agx",  src_comp=[1, 1, 1, 1], dest_comp=1, indices=[ATOMIC_OP, SIGN_EXTEND])
-intrinsic("global_atomic_swap_nv",  src_comp=[1, 1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
-intrinsic("global_atomic_swap_pco",  src_comp=[4], dest_comp=1, indices=[ATOMIC_OP], bit_sizes=[32])
+intrinsic("deref_atomic_swap",  src_comp=[-1, 0, 0], dest_comp=0, indices=[ACCESS, ATOMIC_OP])
+intrinsic("ssbo_atomic_swap",  src_comp=[-1, 1, 0, 0], dest_comp=0, indices=[ACCESS, ATOMIC_OP, OFFSET_SHIFT])
+intrinsic("shared_atomic_swap",  src_comp=[1, 0, 0], dest_comp=0, indices=[BASE, ATOMIC_OP])
+intrinsic("shared_atomic_swap_nv",  src_comp=[1, 0, 0], dest_comp=0, indices=[BASE, ATOMIC_OP, OFFSET_SHIFT_NV])
+intrinsic("task_payload_atomic_swap",  src_comp=[1, 0, 0], dest_comp=0, indices=[BASE, ATOMIC_OP])
+intrinsic("global_atomic_swap",  src_comp=[1, 0, 0], dest_comp=0, indices=[ATOMIC_OP])
+intrinsic("global_atomic_swap_2x32",  src_comp=[2, 0, 0], dest_comp=0, indices=[ATOMIC_OP])
+intrinsic("global_atomic_swap_amd",  src_comp=[1, 1, 0, 0], dest_comp=0, indices=[BASE, ATOMIC_OP])
+intrinsic("global_atomic_swap_agx",  src_comp=[1, 0, 0, 1], dest_comp=0, indices=[ATOMIC_OP, SIGN_EXTEND])
+intrinsic("global_atomic_swap_nv",  src_comp=[1, 0, 0], dest_comp=0, indices=[BASE, ATOMIC_OP])
+intrinsic("global_atomic_swap_pco",  src_comp=[4], dest_comp=0, indices=[ATOMIC_OP], bit_sizes=[32])
 
 def system_value(name, dest_comp, indices=[], bit_sizes=[32], can_reorder=True):
     flags = [CAN_ELIMINATE, CAN_REORDER] if can_reorder else [CAN_ELIMINATE]
@@ -1142,6 +1146,19 @@ system_value("blend_const_color_aaaa8888_unorm", 1)
 
 # System value for internal compute shaders in radeonsi.
 system_value("user_data_amd", 8)
+
+# Whether to use load_frag_coord_x() or load_pixel_coord() based on dynamic states.
+intrinsic("load_use_float_frag_coord_xy_amd", dest_comp=1, bit_sizes=[1],
+          flags=[CAN_ELIMINATE, CAN_REORDER])
+
+# If true, derive sample_mask_in from helper_invocation because sample_mask_in
+# is uninitialized.
+intrinsic("load_use_sample_mask_in_amd", dest_comp=1, bit_sizes=[1],
+          flags=[CAN_ELIMINATE, CAN_REORDER])
+
+# The result of ac_get_ps_iter_mask from dynamic state.
+intrinsic("load_ps_iter_mask_amd", dest_comp=1, bit_sizes=[32],
+          flags=[CAN_ELIMINATE, CAN_REORDER])
 
 # Loads for gl_Color, for radeonsi which interpolates these in the shader
 # prolog to handle flatshading and front/back color selection without
@@ -1339,6 +1356,11 @@ load("kernel_input", [1], [BASE, RANGE, ALIGN_MUL, ALIGN_OFFSET], [CAN_ELIMINATE
 # src[] = { offset }.
 load("scratch", [1], [ACCESS, ALIGN_MUL, ALIGN_OFFSET], [CAN_ELIMINATE])
 
+# Read the current fragment's tile value for VK_EXT_shader_tile_image.
+# io_semantics.location selects the attachment, ACCESS carries ACCESS_COHERENT.
+# src[] = { offset, sample }
+load("tile_image", [1, 1], [COMPONENT, DEST_TYPE, IO_SEMANTICS, ACCESS], flags=[CAN_ELIMINATE])
+
 # Stores work the same way as loads, except now the first source is the value
 # to store and the second (and possibly third) source specify where to store
 # the value.  SSBO and shared memory stores also have a
@@ -1409,6 +1431,12 @@ system_value("printf_buffer_size", 1, bit_sizes=[32])
 # printf. After lowering, the intrinsic will set an aborted? bit in the printf
 # buffer. This avoids a separate abort buffer.
 intrinsic("printf_abort")
+
+# SPV_KHR_abort
+# The source is a deref to the message type.
+intrinsic("abort", src_comp=[1])
+system_value("abort_buffer_address", 1, bit_sizes=[32,64])
+system_value("abort_buffer_size", 1, bit_sizes=[32])
 
 # Mesh shading MultiView intrinsics
 system_value("mesh_view_count", 1)
@@ -1680,6 +1708,8 @@ intrinsic("prefetch_sam_ir3", [1, 1], flags=[CAN_REORDER])
 intrinsic("prefetch_tex_ir3", [1], flags=[CAN_REORDER])
 intrinsic("prefetch_ubo_ir3", [1], flags=[CAN_REORDER])
 
+intrinsic("resbase_ir3", src_comp=[1], dest_comp=2, flags=[CAN_ELIMINATE, CAN_REORDER])
+
 # Panfrost-specific intrinsic for loading vertex attributes. Takes explicit
 # vertex and instance IDs which we need in order to implement vertex attribute
 # divisor with non-zero base instance on v9+.
@@ -1763,6 +1793,11 @@ intrinsic("texc1_pan", [1, 1, 1, -1], dest_comp=4, bit_sizes=[16, 32],
           indices=[DEST_TYPE, FLAGS], flags=[CAN_ELIMINATE, CAN_REORDER])
 intrinsic("texc2_pan", [1, 1, 1, -1, -1], dest_comp=4, bit_sizes=[16, 32],
           indices=[DEST_TYPE, FLAGS], flags=[CAN_ELIMINATE, CAN_REORDER])
+
+# src = { coords, desc }
+load("tex_pan", [2, 1], indices=[ACCESS, DEST_TYPE], flags=[CAN_ELIMINATE])
+# src = { coords, desc }
+intrinsic("lea_tex_pan", [2, 1], dest_comp=3, indices=[SRC_TYPE], flags=[CAN_ELIMINATE, CAN_REORDER], bit_sizes=[32])
 
 # Loads the sampler paramaters <min_lod, max_lod, lod_bias>
 # src[] = { sampler_index }
@@ -2287,7 +2322,22 @@ intrinsic("strict_wqm_coord_amd", src_comp=[0], dest_comp=0, bit_sizes=[32], ind
           flags=[CAN_ELIMINATE])
 
 intrinsic("cmat_muladd_amd", src_comp=[-1, -1, 0], dest_comp=0, bit_sizes=src2,
-          indices=[SATURATE, NEG_LO_AMD, NEG_HI_AMD, SRC_BASE_TYPE, SRC_BASE_TYPE2], flags=[CAN_ELIMINATE])
+          indices=[SATURATE, NEG_LO_AMD, NEG_HI_AMD, SRC_BASE_TYPE, SRC_BASE_TYPE2], flags=SUBGROUP_FLAGS)
+
+# Global cooperative matrix load with combined cooperative matrix transpose.
+# This corresponds to RDNA4's global_load_tr_b{64,128}. Like typical cooperative matrix operations,
+# this has to be in subgroup uniform control flow with all invocations active.
+# The definition's component size may be 8-bit or 16-bit and matches the type of matrix to load.
+# The result has 8 components (wave32) or 4 components (wave64). The address is ignored for lanes
+# 32-63, and the actual address that's loaded from is probably offset from the values in lanes 0-31.
+# src[] = { address }.
+intrinsic("load_deref_transpose_amd", bit_sizes=[8, 16], dest_comp=0, src_comp=[1],
+          indices=[ACCESS], flags=SUBGROUP_FLAGS)
+intrinsic("load_global_transpose_amd", bit_sizes=[8, 16], dest_comp=0, src_comp=[1],
+          indices=[ACCESS, ALIGN_MUL, ALIGN_OFFSET], flags=SUBGROUP_FLAGS)
+# src[] = { address, unsigned 32-bit offset }.
+intrinsic("load_global_tr_amd", bit_sizes=[8, 16], dest_comp=0, src_comp=[1, 1],
+          indices=[BASE, ACCESS, ALIGN_MUL, ALIGN_OFFSET], flags=SUBGROUP_FLAGS)
 
 # Get the debug log buffer descriptor.
 intrinsic("load_debug_log_desc_amd", bit_sizes=[32], dest_comp=4, flags=[CAN_ELIMINATE, CAN_REORDER])
@@ -2646,9 +2696,6 @@ system_value("simd_width_intel", 1)
 # IndirectDataStartAddress
 system_value("indirect_address_intel", 1)
 
-# The dispatch mask as provided in the FS payload.
-system_value("dispatch_mask_intel", 1)
-
 # The raw coverage mask as provided in the FS payload.
 # The semantics of it depend on the HW state.
 system_value("coverage_mask_intel", 1)
@@ -2664,8 +2711,8 @@ intrinsic("load_reloc_const_intel", dest_comp=1, bit_sizes=[32],
           indices=[PARAM_IDX, BASE], flags=[CAN_ELIMINATE, CAN_REORDER])
 
 # Write a render target
-# src[] = { color, src0_alpha, omask, depth, stencil, predicate }
-intrinsic("store_render_target_intel", [4, 1, 1, 1, 1, 1], indices=[TARGET], bit_sizes=[32, 32, 32, 32, 32, 1])
+# src[] = { color, dual_color, src0_alpha, omask, depth, stencil }
+intrinsic("store_render_target_intel", [4, 4, 1, 1, 1, 1], indices=[TARGET], bit_sizes=[32, 32, 32, 32, 32, 32])
 
 # Shuffle with an offset in bytes instead of a lane index.
 # src[] = { payload, lane offset in bytes }
@@ -2717,6 +2764,12 @@ store("ssbo_block_intel", [-1, 1], [ACCESS, ALIGN_MUL, ALIGN_OFFSET])
 
 # src[] = { value, offset }.
 store("shared_block_intel", [1], [BASE, ALIGN_MUL, ALIGN_OFFSET])
+
+# src[] = { address }.
+load("global_intel", [1], [BASE, ACCESS, ALIGN_MUL, ALIGN_OFFSET], [CAN_ELIMINATE])
+
+# src[] = { value, address }.
+store("global_intel", [1], [BASE, WRITE_MASK, ACCESS, ALIGN_MUL, ALIGN_OFFSET])
 
 # These offsets are into per-subgroup scratch memory, rather than the per-lane
 # offsets the standard NIR intrinsics use.
@@ -2817,9 +2870,10 @@ intrinsic("test_fs_config_intel", dest_comp=1, src_comp=[],
 # The (linear) local invocation index provided in the payload of mesh/task shaders.
 system_value("local_invocation_index_intel", 1)
 
+# The raw value of SR0.0, the contents vary from generation to generation
+system_value("topology_id_intel", 1)
+
 # Intrinsics for Intel bindless thread dispatch
-# BASE=brw_topoloy_id
-system_value("topology_id_intel", 1, indices=[BASE])
 system_value("btd_stack_id_intel", 1)
 system_value("btd_global_arg_addr_intel", 1, bit_sizes=[64])
 system_value("btd_local_arg_addr_intel", 1, bit_sizes=[64])
@@ -2832,8 +2886,8 @@ intrinsic("btd_stack_push_intel", indices=[STACK_SIZE])
 intrinsic("btd_retire_intel")
 
 # Intel-specific ray-tracing intrinsic
-# src[] = { globals, level, operation } SYNCHRONOUS=synchronous
-intrinsic("trace_ray_intel", src_comp=[1, 1, 1], indices=[SYNCHRONOUS])
+# src[] = { globals, payload } SYNCHRONOUS=synchronous
+intrinsic("trace_ray_intel", src_comp=[1, 1], indices=[SYNCHRONOUS])
 
 # System values used for ray-tracing on Intel
 system_value("ray_base_mem_addr_intel", 1, bit_sizes=[64])
@@ -2858,19 +2912,16 @@ system_value("btd_shader_type_intel", 1)
 # 64B, the pointer needs 256B aligned.
 system_value("ray_query_global_intel", 1, bit_sizes=[64])
 
-# Source 0: Accumulator matrix (type specified by DEST_TYPE)
-# Source 1: A matrix (type specified by SRC_TYPE)
-# Source 2: B matrix (type specified by SRC_TYPE)
+# Source order same as DPAS instruction in the HW.
+#
+# Source 0: Accumulator matrix (type specified by DEST_BASE_TYPE)
+# Source 1: B matrix (type specified by SRC_BASE_TYPE)
+# Source 2: A matrix (type specified by SRC_BASE_TYPE)
 #
 # The matrix parameters are the slices owned by the invocation.
 #
-# The accumulator is source 0 because that is the source the intrinsic
-# infrastructure in NIR uses to determine the number of components in the
-# result.
-#
-# The number of components for the second and third sources is -1 to avoid
-# validation of its value. Some supported configurations will have the
-# component count of that matrix different than the others.
+# The number of components in the A/B sources may not match the
+# destination due to different packing factors.
 intrinsic("dpas_intel", dest_comp=0, src_comp=[0, -1, -1],
           indices=[DEST_BASE_TYPE, SRC_BASE_TYPE, SATURATE, SYSTOLIC_DEPTH, REPEAT_COUNT],
           flags=[CAN_ELIMINATE])
@@ -2923,6 +2974,8 @@ intrinsic("ipa_nv", dest_comp=1, src_comp=[1, 1], bit_sizes=[32],
 # FLAGS indicate if we load vertex_id == 2
 intrinsic("ldtram_nv", dest_comp=2, bit_sizes=[32],
           indices=[BASE, FLAGS], flags=[CAN_ELIMINATE, CAN_REORDER])
+# Gives the mask of active threads matching the same source value
+intrinsic("match_any_nv", src_comp=[0], dest_comp=1, flags=SUBGROUP_FLAGS)
 
 # NVIDIA-specific Image intrinsics
 # only used for kepler address calculations.
@@ -3163,4 +3216,7 @@ load("depth_texture_kk", [1], [IMAGE_DIM, IMAGE_ARRAY], [CAN_ELIMINATE])
 intrinsic("load_sampler_handle_kk", [1], 1, [],
           flags=[CAN_ELIMINATE, CAN_REORDER],
           bit_sizes=[16])
+# Texture fence to ensure writes.
+image("fence_kk")
+# Store clip distance to vertex output.
 store("clip_distance_kk", [], [BASE])

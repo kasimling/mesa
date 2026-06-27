@@ -101,8 +101,8 @@ blorp_get_surface_base_address(struct blorp_batch *batch)
 {
    struct anv_cmd_buffer *cmd_buffer = batch->driver_batch;
    return (struct blorp_address) {
-      .buffer = cmd_buffer->device->internal_surface_state_pool.block_pool.bo,
-      .offset = -cmd_buffer->device->internal_surface_state_pool.start_offset,
+      .buffer = anv_device_get_internal_surface_state_pool(cmd_buffer->device)->block_pool.bo,
+      .offset = -anv_device_get_internal_surface_state_pool(cmd_buffer->device)->start_offset,
    };
 }
 #endif
@@ -537,6 +537,8 @@ get_color_aux_op(const struct blorp_params *params)
    case BLORP_OP_SLOW_COLOR_CLEAR:
    case BLORP_OP_BLIT:
    case BLORP_OP_COPY:
+   case BLORP_OP_COPY_INDIRECT:
+   case BLORP_OP_COPY_IMAGE_INDIRECT:
       assert(params->fast_clear_op == ISL_AUX_OP_NONE);
       return ANV_COLOR_AUX_OP_CLASS_NONE;
    }
@@ -598,4 +600,11 @@ void
 genX(blorp_init_dynamic_states)(struct blorp_context *context)
 {
    blorp_init_dynamic_states(context);
+}
+
+static bool *
+blorp_get_write_fencing_status(struct blorp_batch *blorp_batch)
+{
+   struct anv_cmd_buffer *cmd_buffer = blorp_batch->driver_batch;
+   return &cmd_buffer->batch.write_fence_status;
 }

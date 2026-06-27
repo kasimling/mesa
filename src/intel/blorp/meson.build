@@ -37,6 +37,7 @@ files_libblorp = files(
   'blorp.h',
   'blorp_blit.c',
   'blorp_clear.c',
+  'blorp_indirect_copy.c',
   'blorp_nir_builder.h',
   'blorp_priv.h',
 )
@@ -59,13 +60,14 @@ libblorp = static_library(
   gnu_symbol_visibility : 'hidden',
   dependencies : [
     idep_nir_headers, idep_genxml, idep_mesautil, idep_intel_dev,
-    idep_blorp_shaders
+    idep_intel_compiler_gen, idep_blorp_shaders
   ],
   build_by_default: false,
 )
 
 idep_intel_blorp = declare_dependency(
   link_with: libblorp,
+  dependencies: [idep_intel_compiler_gen],
 )
 
 if with_intel_elk

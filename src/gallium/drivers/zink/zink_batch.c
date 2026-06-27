@@ -961,6 +961,9 @@ zink_end_batch(struct zink_context *ctx)
       submit_queue(bs, NULL, 0);
    }
 
+   ctx->last_transfer_sync = 0;
+   ctx->rp_counter = 0;
+
 #if HAVE_RENDERDOC_INTEGRATION
    if (!(ctx->flags & ZINK_CONTEXT_COPY_ONLY) && screen->renderdoc_capturing && !screen->renderdoc_capture_all &&
        p_atomic_read(&screen->renderdoc_frame) > screen->renderdoc_capture_end) {
@@ -1198,7 +1201,7 @@ zink_batch_usage_unflushed_wait(struct zink_context *ctx, struct zink_batch_usag
    if (!zink_batch_usage_exists(u))
       return true;
    /* this batch state was already completed and reset */
-   if (u->submit_count - submit_count > 1)
+   if (zink_batch_submit_count_diff(u->submit_count, submit_count) > 1)
       return true;
    if (zink_batch_usage_is_unflushed(u)) {
       if (likely(u == &ctx->bs->usage)) {
@@ -1224,7 +1227,7 @@ batch_usage_wait(struct zink_context *ctx, struct zink_batch_usage *u, unsigned 
    if (!zink_batch_usage_exists(u))
       return;
    /* this batch state was already completed and reset */
-   if (u->submit_count - submit_count > 1)
+   if (zink_batch_submit_count_diff(u->submit_count, submit_count) > 1)
       return;
    if (zink_batch_usage_unflushed_wait(ctx, u, submit_count, trywait))
       zink_wait_on_batch(ctx, u->usage);

@@ -874,6 +874,7 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader)
       shader->info.outputs_written |= BITFIELD64_BIT(FRAG_RESULT_SAMPLE_MASK);
       break;
 
+   case nir_intrinsic_load_tile_image:
    case nir_intrinsic_load_tile_pan:
    case nir_intrinsic_load_tile_res_pan: {
       const nir_io_semantics io = nir_intrinsic_io_semantics(instr);
@@ -905,6 +906,10 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader)
       }
       break;
    }
+
+   case nir_intrinsic_abort:
+      shader->info.uses_abort = true;
+      break;
 
    default:
       shader->info.uses_bindless |= intrinsic_is_bindless(instr);

@@ -86,7 +86,8 @@ iris_backend_compile(const struct iris_screen *screen,
       struct jay_shader_bin *bin =
          jay_compile(devinfo, mem_ctx, nir,
                      (union brw_any_prog_data *)params->prog_data,
-                     (union brw_any_prog_key *)params->key);
+                     (union brw_any_prog_key *)params->key,
+                     params->archiver);
 
       return bin->kernel;
    } else {
@@ -138,8 +139,7 @@ iris_apply_brw_fs_prog_data(struct iris_compiled_shader *shader,
    iris->uses_depth_w_coefficients  = brw->uses_depth_w_coefficients;
 
    iris->uses_nonperspective_interp_modes = brw->uses_nonperspective_interp_modes;
-
-   iris->is_per_sample = brw_fs_prog_data_is_persample(brw, 0);
+   iris->is_per_sample = brw->persample_dispatch;
 }
 
 static void
@@ -2793,8 +2793,9 @@ iris_compile_fs(struct iris_screen *screen,
    elk_nir_lower_fs_outputs(nir);
 #endif
 
-   int null_rts = brw_nir_fs_needs_null_rt(devinfo, nir,
-                                           key->alpha_to_coverage) ? 1 : 0;
+   int null_rts = key->nr_color_regions == 0 &&
+      brw_nir_fs_needs_null_rt(devinfo, nir,
+                               key->alpha_to_coverage) ? 1 : 0;
 
    struct iris_binding_table bt;
    iris_setup_binding_table(devinfo, nir, &bt,
@@ -4070,8 +4071,7 @@ iris_fs_barycentric_modes(const struct iris_compiled_shader *shader,
                           enum intel_fs_config pushed_fs_config)
 {
    if (shader->brw_prog_data) {
-      return fs_prog_data_barycentric_modes(brw_fs_prog_data(shader->brw_prog_data),
-                                            pushed_fs_config);
+      return brw_fs_prog_data(shader->brw_prog_data)->barycentric_interp_modes;
    } else {
 #ifdef INTEL_USE_ELK
       assert(shader->elk_prog_data);

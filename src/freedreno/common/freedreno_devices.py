@@ -148,6 +148,8 @@ a6xx_base = GPUProps(
         line_width_max = 1.0,
         mov_half_shared_quirk = True,
         max_draw_states = 32,
+        max_texel_buffer_range_elements = 1 << 27,
+        max_storage_buffer_range_bytes = 1 << 27,
     )
 
 
@@ -217,6 +219,7 @@ a6xx_gen3 = GPUProps(
         # HW seem to support this, but prop driver doesn't enable it,
         # Be safe and don't enable it either.
         # supports_linear_mipmap_threshold_in_blocks = True,
+        round_robin_errata = True,
     )
 
 a6xx_gen4 = GPUProps(
@@ -258,6 +261,7 @@ a6xx_gen4 = GPUProps(
         # HW seem to support this, but prop driver doesn't enable it,
         # Be safe and don't enable it either.
         # supports_linear_mipmap_threshold_in_blocks = True,
+        round_robin_errata = True,
     )
 
 add_gpus([
@@ -796,6 +800,10 @@ a7xx_base = GPUProps(
         has_pred_bit = True,
         has_pc_dgen_so_cntl = True,
         has_eolm_eogm = True,
+
+        round_robin_errata = True,
+        max_texel_buffer_range_elements = 1 << 27,
+        max_storage_buffer_range_bytes = 1 << 27,
     )
 
 a7xx_gen1 = GPUProps(
@@ -822,6 +830,7 @@ a7xx_gen2 = GPUProps(
         has_hw_bin_scaling = True,
         has_image_processing = True,
         has_64b_image_atomics = True,
+        has_implicit_fragface_fragcoord_ij_linear = True,
     )
 
 a7xx_gen3 = GPUProps(
@@ -852,6 +861,7 @@ a7xx_gen3 = GPUProps(
         has_image_processing = True,
         max_draw_states = 64,
         has_64b_image_atomics = True,
+        has_implicit_fragface_fragcoord_ij_linear = True,
     )
 
 a730_magic_regs = dict(
@@ -873,7 +883,7 @@ a730_raw_magic_regs = [
         [A6XXRegs.REG_A7XX_UCHE_UNKNOWN_0E11, 0x00000040],
         [A6XXRegs.REG_A7XX_SP_HLSQ_DBG_ECO_CNTL, 0x00008000],
         [A6XXRegs.REG_A6XX_SP_DBG_ECO_CNTL, 0x10000000],
-        [A6XXRegs.REG_A6XX_PC_MODE_CNTL,    0x0000003f],  # 0x00001f1f in some tests
+        [A6XXRegs.REG_A6XX_PC_MODE_CNTL,    0x1f1f],
         [A6XXRegs.REG_A6XX_PC_DBG_ECO_CNTL, 0x20080000],
         [A6XXRegs.REG_A7XX_PC_UNKNOWN_9E24, 0x21fc7f00],
         [A6XXRegs.REG_A7XX_VFD_DBG_ECO_CNTL, 0x00000000],
@@ -922,9 +932,7 @@ a740_raw_magic_regs = [
         [A6XXRegs.REG_A7XX_UCHE_UNKNOWN_0E11, 0x00000000],
         [A6XXRegs.REG_A7XX_SP_HLSQ_DBG_ECO_CNTL, 0x00000000],
         [A6XXRegs.REG_A6XX_SP_DBG_ECO_CNTL, 0x10000000],
-        # Blob uses 0x1f or 0x1f1f, however these values cause vertices
-        # corruption in some tests.
-        [A6XXRegs.REG_A6XX_PC_MODE_CNTL,    0x0000003f],
+        [A6XXRegs.REG_A6XX_PC_MODE_CNTL,    0x1f1f],
         [A6XXRegs.REG_A6XX_PC_DBG_ECO_CNTL, 0x00100000],
         [A6XXRegs.REG_A7XX_PC_UNKNOWN_9E24, 0x21585600],
         [A6XXRegs.REG_A7XX_VFD_DBG_ECO_CNTL, 0x00008000],
@@ -1028,7 +1036,7 @@ add_gpus([
             [A6XXRegs.REG_A7XX_UCHE_UNKNOWN_0E11, 0x00000000],
             [A6XXRegs.REG_A7XX_SP_HLSQ_DBG_ECO_CNTL, 0x00000000],
             [A6XXRegs.REG_A6XX_SP_DBG_ECO_CNTL, 0x10000000],
-            [A6XXRegs.REG_A6XX_PC_MODE_CNTL, 0x1f],
+            [A6XXRegs.REG_A6XX_PC_MODE_CNTL, 0x1f1f],
             [A6XXRegs.REG_A6XX_PC_DBG_ECO_CNTL, 0x00100000],
             [A6XXRegs.REG_A7XX_PC_UNKNOWN_9E24, 0x01585600],
             [A6XXRegs.REG_A7XX_VFD_DBG_ECO_CNTL, 0x00008000],
@@ -1111,9 +1119,7 @@ add_gpus([
             [A6XXRegs.REG_A7XX_UCHE_UNKNOWN_0E11, 0x00000080],
             [A6XXRegs.REG_A7XX_SP_HLSQ_DBG_ECO_CNTL, 0x00000000],
             [A6XXRegs.REG_A6XX_SP_DBG_ECO_CNTL, 0x10000000],
-            # Blob uses 0x1f or 0x1f1f, however these values cause vertices
-            # corruption in some tests.
-            [A6XXRegs.REG_A6XX_PC_MODE_CNTL,    0x0000003f],
+            [A6XXRegs.REG_A6XX_PC_MODE_CNTL,    0x1f1f],
             [A6XXRegs.REG_A6XX_PC_DBG_ECO_CNTL, 0x00100000],
             [A6XXRegs.REG_A7XX_PC_UNKNOWN_9E24, 0x21585600],
             [A6XXRegs.REG_A7XX_VFD_DBG_ECO_CNTL, 0x00008000],
@@ -1240,6 +1246,9 @@ a8xx_base = GPUProps(
         has_rt_workaround = False,
         supports_double_threadsize = False,
         has_dual_wave_dispatch = True,
+        round_robin_errata = False,
+        max_texel_buffer_range_elements = (1 << 29) - 1,
+        max_storage_buffer_range_bytes = (1 << 31) - 1,
     )
 
 # For a8xx, the chicken bit and most other non-ctx reg

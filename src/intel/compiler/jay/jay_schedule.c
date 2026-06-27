@@ -100,9 +100,17 @@ populate_dag(struct sched_ctx *ctx,
          address = ctx->dag.node;
       }
 
-      /* Serialize side effects for now */
+      /* Serialize side effects for now, including SENDs which need to be
+       * predicated away after a demote.
+       */
       if ((I->op == JAY_OPCODE_SEND && !jay_send_pure(I)) ||
-          I->op == JAY_OPCODE_SCHEDULE_BARRIER) {
+          I->op == JAY_OPCODE_SCHEDULE_BARRIER ||
+          I->op == JAY_OPCODE_INIT_HELPERS ||
+          I->op == JAY_OPCODE_DEMOTE ||
+          I->op == JAY_OPCODE_HELPER_SEL ||
+          (I->op == JAY_OPCODE_SEND &&
+           func->shader->helpers_tracked &&
+           jay_send_skip_helpers(I))) {
 
          jay_dag_add_edge(&ctx->dag, sidefx);
          sidefx = ctx->dag.node;
@@ -138,7 +146,7 @@ calculate_pressure_delta_before(struct sched_ctx *ctx, jay_inst *I)
 
    /* Make destinations live */
    jay_foreach_dst(I, dst) {
-      delta += util_next_power_of_two(jay_num_values(dst)) * scale(ctx, dst);
+      delta += jay_num_values(dst) * scale(ctx, dst);
    }
 
    return delta;
@@ -155,11 +163,6 @@ calculate_pressure_delta_after(struct sched_ctx *ctx, jay_inst *I)
     */
    jay_foreach_dst_index(I, _, index) {
       delta -= !u_sparse_bitset_test(&ctx->live, index) * scale(ctx, I->dst);
-   }
-
-   jay_foreach_dst(I, d) {
-      unsigned n = jay_num_values(d);
-      delta -= (util_next_power_of_two(n) - n) * scale(ctx, I->dst);
    }
 
    /* Late-kill sources. We precomputed the deduplication info and stashed it in
@@ -326,6 +329,7 @@ pass(jay_function *f)
 
          populate_dag(&sctx, f, block, def);
          pressure_schedule_block(f, block, &schedule, &sctx, memctx);
+         f->prioritize_pressure = true;
       }
    }
 

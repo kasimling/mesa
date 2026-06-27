@@ -701,6 +701,8 @@ validate_intrinsic_instr(nir_intrinsic_instr *instr, validate_state *state)
 
          switch (format) {
          case PIPE_FORMAT_R32_FLOAT:
+         case PIPE_FORMAT_R16G16_FLOAT:
+         case PIPE_FORMAT_R16G16B16A16_FLOAT:
             allowed = is_float || op == nir_atomic_op_xchg;
             break;
          case PIPE_FORMAT_R16_FLOAT:
@@ -718,8 +720,13 @@ validate_intrinsic_instr(nir_intrinsic_instr *instr, validate_state *state)
          }
 
          validate_assert(state, allowed);
+         const struct util_format_description *fmt_desc =
+            util_format_description(format);
          validate_assert(state, instr->def.bit_size ==
-                                   util_format_get_blocksizebits(format));
+                                fmt_desc->channel[0].size);
+         validate_assert(state,
+                         instr->num_components >= 1 &&
+                         instr->num_components <= 4);
       }
       break;
    }
@@ -744,6 +751,28 @@ validate_intrinsic_instr(nir_intrinsic_instr *instr, validate_state *state)
                             BITFIELD_MASK(nir_src_num_components(instr->src[0])));
       }
       break;
+
+   case nir_intrinsic_load_deref_transpose_amd: {
+      nir_deref_instr *src = nir_src_as_deref(instr->src[0]);
+      assert(src);
+      unsigned disallow_access = ACCESS_ATOMIC | ACCESS_SKIP_HELPERS | ACCESS_SMEM_AMD;
+      validate_assert(state, !(nir_intrinsic_access(instr) & disallow_access));
+      validate_assert(state, glsl_type_is_scalar(src->type));
+      validate_assert(state, instr->num_components == 8 || instr->num_components == 4);
+      dest_bit_size = glsl_get_bit_size(src->type);
+      src_bit_sizes[0] = 64;
+      break;
+   }
+
+   case nir_intrinsic_load_global_transpose_amd:
+   case nir_intrinsic_load_global_tr_amd: {
+      unsigned disallow_access = ACCESS_ATOMIC | ACCESS_SKIP_HELPERS | ACCESS_SMEM_AMD;
+      validate_assert(state, !(nir_intrinsic_access(instr) & disallow_access));
+      validate_assert(state, instr->num_components == 8 || instr->num_components == 4);
+      src_bit_sizes[0] = 64;
+      src_bit_sizes[1] = 32;
+      break;
+   }
 
    case nir_intrinsic_global_atomic_nv:
    case nir_intrinsic_global_atomic_swap_nv:
@@ -780,6 +809,21 @@ validate_intrinsic_instr(nir_intrinsic_instr *instr, validate_state *state)
          validate_assert(state, instr->src[2].ssa->bit_size == 1);
       }
 
+      break;
+   }
+
+   case nir_intrinsic_barrier: {
+      unsigned semantics = nir_intrinsic_memory_semantics(instr);
+      bool is_arrive = semantics & NIR_MEMORY_CONTROL_ARRIVE;
+      bool is_wait = semantics & NIR_MEMORY_CONTROL_WAIT;
+      if (nir_intrinsic_execution_scope(instr) != SCOPE_NONE) {
+         if (is_wait)
+            validate_assert(state, is_arrive || !(semantics & NIR_MEMORY_RELEASE));
+         if (is_arrive)
+            validate_assert(state, is_wait || !(semantics & NIR_MEMORY_ACQUIRE));
+      } else {
+         validate_assert(state, !is_arrive && !is_wait);
+      }
       break;
    }
 
@@ -1249,6 +1293,7 @@ validate_jump_instr(nir_jump_instr *instr, validate_state *state)
    switch (instr->type) {
    case nir_jump_return:
    case nir_jump_halt:
+   case nir_jump_abort:
       validate_assert(state, block->successors[0] == state->impl->end_block);
       validate_assert(state, block->successors[1] == NULL);
       validate_assert(state, instr->target == NULL);
@@ -1517,6 +1562,7 @@ validate_block(nir_block *block, validate_state *state)
 {
    validate_assert(state, block->cf_node.parent == state->parent_node);
 
+   validate_assert(state, block->impl == state->impl);
    state->block = block;
 
    exec_list_validate(&block->instr_list);

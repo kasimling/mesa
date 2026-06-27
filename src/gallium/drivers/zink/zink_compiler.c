@@ -2333,13 +2333,16 @@ rewrite_atomic_ssbo_instr(nir_builder *b, nir_instr *instr, struct bo_vars *bo)
    for (unsigned i = 0; i < num_components; i++) {
       nir_deref_instr *deref_arr = nir_build_deref_array(b, deref_struct, offset);
       nir_intrinsic_instr *new_instr = nir_intrinsic_instr_create(b->shader, op);
+      new_instr->num_components = 1;
       nir_def_init(&new_instr->instr, &new_instr->def, 1,
                    intr->def.bit_size);
       nir_intrinsic_set_atomic_op(new_instr, nir_intrinsic_atomic_op(intr));
       new_instr->src[0] = nir_src_for_ssa(&deref_arr->def);
       /* deref ops have no offset src, so copy the srcs after it */
-      for (unsigned j = 2; j < nir_intrinsic_infos[intr->intrinsic].num_srcs; j++)
+      for (unsigned j = 2; j < nir_intrinsic_infos[intr->intrinsic].num_srcs; j++) {
          new_instr->src[j - 1] = nir_src_for_ssa(intr->src[j].ssa);
+         assert(new_instr->src[j - 1].ssa->num_components == 1);
+      }
       nir_builder_instr_insert(b, &new_instr->instr);
 
       result[i] = &new_instr->def;
@@ -2699,6 +2702,16 @@ assign_consumer_var_io(mesa_shader_stage stage, nir_variable *var, struct io_slo
       slot -= VARYING_SLOT_PATCH0;
    }
    uint8_t *slot_map = var->data.patch ? io->patch_slot_map : io->slot_map;
+   if (slot_map[slot] == (unsigned char)-1) {
+      switch (slot) {
+      case VARYING_SLOT_COL0:
+      case VARYING_SLOT_COL1:
+         slot += VARYING_SLOT_BFC0 - 1;
+         break;
+      default:
+         break;
+      }
+   }
    if (slot_map[slot] == (unsigned char)-1) {
       /* texcoords can't be eliminated in fs due to GL_COORD_REPLACE,
          * so keep for now and eliminate later
@@ -3495,8 +3508,9 @@ zink_shader_spirv_compile(struct zink_screen *screen, struct zink_shader *zs, st
    }
 
    sci.sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
+   sci.flags = VK_SHADER_CREATE_INDEPENDENT_SETS_BIT_KHR;
    if (zs->info.stage == MESA_SHADER_MESH && zs->info.prev_stage != MESA_SHADER_TASK)
-      sci.flags = VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT;
+      sci.flags |= VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT;
    sci.stage = mesa_to_vk_shader_stage(zs->info.stage);
    sci.nextStage = zink_get_next_stage(zs->info.stage);
    sci.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;

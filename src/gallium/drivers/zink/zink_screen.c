@@ -631,6 +631,8 @@ zink_init_shader_caps(struct zink_screen *screen)
          screen->info.feats12.shaderFloat16 ||
          (screen->info.have_KHR_shader_float16_int8 &&
           screen->info.shader_float16_int8_feats.shaderFloat16);
+      caps->fp16_no_denorms = caps->fp16 && !screen->info.props12.shaderDenormPreserveFloat16
+         && screen->info.props12.shaderDenormFlushToZeroFloat16;
       caps->glsl_16bit_load_dst = true;
 
       caps->int16 = screen->info.feats.features.shaderInt16;
@@ -3102,6 +3104,7 @@ init_driver_workarounds(struct zink_screen *screen)
    case VK_DRIVER_ID_MESA_LLVMPIPE:
    case VK_DRIVER_ID_MESA_PANVK:
    case VK_DRIVER_ID_ARM_PROPRIETARY:
+   case VK_DRIVER_ID_QUALCOMM_PROPRIETARY:
       screen->driver_workarounds.can_do_invalid_linear_modifier = true;
       break;
    default:
@@ -3128,6 +3131,10 @@ init_driver_workarounds(struct zink_screen *screen)
       /* this has bad perf on AMD */
       screen->info.have_KHR_push_descriptor = false;
       /* Interpolation is not consistent between two triangles of a rectangle. */
+      screen->driver_workarounds.inconsistent_interpolation = true;
+      break;
+   case VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA:
+   case VK_DRIVER_ID_MESA_TURNIP:
       screen->driver_workarounds.inconsistent_interpolation = true;
       break;
    default:
@@ -3171,8 +3178,15 @@ init_driver_workarounds(struct zink_screen *screen)
    if (zink_debug & ZINK_DEBUG_NOGENERAL)
       screen->driver_workarounds.general_layout = false;
 
+   if (!screen->info.have_EXT_vertex_input_dynamic_state || !screen->info.have_EXT_transform_feedback)
+      screen->info.have_KHR_device_address_commands = false;
+
    if (!screen->resizable_bar)
       screen->info.have_EXT_host_image_copy = false;
+
+   /* required for SSO usage */
+   if (!screen->info.have_KHR_maintenance11)
+      screen->info.have_EXT_shader_object = false;
 
    /* msrtss being enabled for all singlesampled images has a massive memory usage implication on this
     * driver. temporary, could be removed after the driver handles shadow images better. */

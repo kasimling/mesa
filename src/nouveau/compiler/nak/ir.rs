@@ -18,6 +18,7 @@ pub use crate::ssa_value::*;
 use compiler::as_slice::*;
 use compiler::cfg::CFG;
 use compiler::dataflow::ForwardDataflow;
+use compiler::enum_as_u8::EnumAsU8;
 use compiler::smallvec::SmallVec;
 use compiler::vec_pair::VecPair;
 use nak_ir_proc::*;
@@ -56,7 +57,7 @@ impl LabelAllocator {
 
 /// Represents a register file
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, EnumAsU8, Eq, Hash, PartialEq)]
 pub enum RegFile {
     /// The general-purpose register file
     ///
@@ -185,45 +186,6 @@ impl fmt::Display for RegFile {
     }
 }
 
-impl From<RegFile> for u8 {
-    fn from(value: RegFile) -> u8 {
-        value as u8
-    }
-}
-
-impl TryFrom<u32> for RegFile {
-    type Error = &'static str;
-
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(RegFile::GPR),
-            1 => Ok(RegFile::UGPR),
-            2 => Ok(RegFile::Pred),
-            3 => Ok(RegFile::UPred),
-            4 => Ok(RegFile::Carry),
-            5 => Ok(RegFile::Bar),
-            6 => Ok(RegFile::Mem),
-            _ => Err("Invalid register file number"),
-        }
-    }
-}
-
-impl TryFrom<u16> for RegFile {
-    type Error = &'static str;
-
-    fn try_from(value: u16) -> Result<Self, Self::Error> {
-        RegFile::try_from(u32::from(value))
-    }
-}
-
-impl TryFrom<u8> for RegFile {
-    type Error = &'static str;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        RegFile::try_from(u32::from(value))
-    }
-}
-
 /// A trait for things which have an associated register file
 pub trait HasRegFile {
     fn file(&self) -> RegFile;
@@ -311,7 +273,7 @@ impl Iterator for RegFileSet {
         if self.is_empty() {
             None
         } else {
-            let file = self.bits.trailing_zeros().try_into().unwrap();
+            let file = (self.bits.trailing_zeros() as u8).try_into().unwrap();
             self.remove(file);
             Some(file)
         }
@@ -438,7 +400,7 @@ impl RegRef {
 
 impl HasRegFile for RegRef {
     fn file(&self) -> RegFile {
-        ((self.packed >> 29) & 0x7).try_into().unwrap()
+        (((self.packed >> 29) & 0x7) as u8).try_into().unwrap()
     }
 }
 
@@ -2651,7 +2613,7 @@ impl MemAccess {
 #[allow(dead_code)]
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub enum AtomType {
-    F16x2,
+    F16v2,
     U32,
     I32,
     F32,
@@ -2661,11 +2623,11 @@ pub enum AtomType {
 }
 
 impl AtomType {
-    pub fn F(bits: u8) -> AtomType {
-        match bits {
-            16 => panic!("16-bit float atomics not yet supported"),
-            32 => AtomType::F32,
-            64 => AtomType::F64,
+    pub fn F(bits: u8, comps: u8) -> AtomType {
+        match (bits, comps) {
+            (16, 2) => AtomType::F16v2,
+            (32, 1) => AtomType::F32,
+            (64, 1) => AtomType::F64,
             _ => panic!("Invalid float atomic type"),
         }
     }
@@ -2688,7 +2650,7 @@ impl AtomType {
 
     pub fn bits(&self) -> usize {
         match self {
-            AtomType::F16x2 | AtomType::F32 => 32,
+            AtomType::F16v2 | AtomType::F32 => 32,
             AtomType::U32 | AtomType::I32 => 32,
             AtomType::U64 | AtomType::I64 | AtomType::F64 => 64,
         }
@@ -2696,7 +2658,7 @@ impl AtomType {
 
     pub fn is_float(&self) -> bool {
         match self {
-            AtomType::F16x2 | AtomType::F32 | AtomType::F64 => true,
+            AtomType::F16v2 | AtomType::F32 | AtomType::F64 => true,
             AtomType::U32 | AtomType::I32 | AtomType::U64 | AtomType::I64 => {
                 false
             }
@@ -2707,7 +2669,7 @@ impl AtomType {
 impl fmt::Display for AtomType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AtomType::F16x2 => write!(f, ".f16x2"),
+            AtomType::F16v2 => write!(f, ".f16v2"),
             AtomType::U32 => write!(f, ".u32"),
             AtomType::I32 => write!(f, ".i32"),
             AtomType::F32 => write!(f, ".f32"),
@@ -8210,16 +8172,6 @@ const _: () = {
     debug_assert!(size_of::<Op>() == 16);
 };
 
-// The DisplayOp constraint exists to keep the type system from recursing
-impl<T: DisplayOp> From<T> for Op
-where
-    Box<T>: Into<Op>,
-{
-    fn from(op: T) -> Self {
-        Box::new(op).into()
-    }
-}
-
 impl Op {
     pub fn is_branch(&self) -> bool {
         matches!(
@@ -9147,20 +9099,9 @@ pub struct BasicBlock {
 }
 
 impl BasicBlock {
-    pub fn map_instrs(&mut self, mut map: impl FnMut(Instr) -> MappedInstrs) {
-        let mut instrs = Vec::new();
-        for i in self.instrs.drain(..) {
-            match map(i) {
-                MappedInstrs::None => (),
-                MappedInstrs::One(i) => {
-                    instrs.push(i);
-                }
-                MappedInstrs::Many(mut v) => {
-                    instrs.append(&mut v);
-                }
-            }
-        }
-        self.instrs = instrs;
+    pub fn map_instrs(&mut self, map: impl FnMut(Instr) -> MappedInstrs) {
+        let instrs = std::mem::take(&mut self.instrs);
+        self.instrs = instrs.into_iter().flat_map(map).collect();
     }
 
     pub fn phi_dsts_ip(&self) -> Option<usize> {
@@ -9442,6 +9383,25 @@ pub struct TessellationShaderInfo {
 }
 
 #[derive(Debug)]
+pub struct TaskShaderInfo {
+    pub local_size: u16,
+    pub payload_smem_size: u16,
+    pub smem_size: u16,
+}
+
+#[derive(Debug)]
+pub struct MeshShaderInfo {
+    pub has_task_shader: bool,
+    pub has_gs_sph: bool,
+    pub primitive_io: VtgIoInfo,
+    pub max_vertices: u16,
+    pub max_primitives: u16,
+    pub output_topology: nak_mesh_topology,
+    pub local_size: u16,
+    pub smem_size: u16,
+}
+
+#[derive(Debug)]
 pub enum ShaderStageInfo {
     Compute(ComputeShaderInfo),
     Vertex(VertexShaderInfo),
@@ -9449,6 +9409,8 @@ pub enum ShaderStageInfo {
     Geometry(GeometryShaderInfo),
     TessellationInit(TessellationInitShaderInfo),
     Tessellation(TessellationShaderInfo),
+    Task(TaskShaderInfo),
+    Mesh(MeshShaderInfo),
 }
 
 #[derive(Debug, Default)]
@@ -10006,9 +9968,9 @@ impl Shader<'_> {
     pub fn remove_annotations(&mut self) {
         self.map_instrs(|instr: Instr, _| -> MappedInstrs {
             if matches!(instr.op, Op::Annotate(_)) {
-                MappedInstrs::None
+                [].into()
             } else {
-                MappedInstrs::One(instr)
+                [instr].into()
             }
         })
     }

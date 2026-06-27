@@ -259,12 +259,18 @@ jay_collect_vectors(jay_builder *b, jay_def *vecs, uint32_t nr)
    uint32_t nr_indices = 0;
 
    for (unsigned i = 0; i < nr; ++i) {
-      assert(vecs[i].file == vecs[0].file && jay_is_ssa(vecs[i]));
       assert(!vecs[i].negate && !vecs[i].abs);
-
-      jay_foreach_comp(vecs[i], c) {
+      if (jay_is_null(vecs[i])) {
+         assert(i != 0);
          assert(nr_indices < ARRAY_SIZE(indices));
-         indices[nr_indices++] = jay_channel(vecs[i], c);
+         indices[nr_indices++] = 0;
+      } else {
+         assert(vecs[i].file == vecs[0].file && jay_is_ssa(vecs[i]));
+
+         jay_foreach_comp(vecs[i], c) {
+            assert(nr_indices < ARRAY_SIZE(indices));
+            indices[nr_indices++] = jay_channel(vecs[i], c);
+         }
       }
    }
 
@@ -386,7 +392,7 @@ static inline jay_inst *
 jay_set_conditional_mod(jay_builder *b,
                         jay_inst *I,
                         jay_def cond_flag,
-                        enum jay_conditional_mod cmod)
+                        gen_condition cmod)
 {
    I->conditional_mod = cmod;
    return jay_set_cond_flag(b, I, cond_flag);
@@ -424,7 +430,7 @@ JAY_BUILD_SRC(uint32_t x)
 static inline jay_inst *
 _jay_CMP(jay_builder *b,
          enum jay_type src_type,
-         enum jay_conditional_mod cmod,
+         gen_condition cmod,
          jay_def dst,
          jay_def src0,
          jay_def src1)
@@ -452,7 +458,7 @@ _jay_CMP(jay_builder *b,
    _jay_CMP(b, st, cmod, dst, JAY_BUILD_SRC(src0), JAY_BUILD_SRC(src1))
 
 struct jayb_send_params {
-   enum brw_sfid sfid;
+   enum gen_sfid sfid;
    uint64_t msg_desc;
    jay_def dst;
    jay_def header;
@@ -468,6 +474,7 @@ struct jayb_send_params {
    bool uniform;
    bool bindless;
    bool pure;
+   bool skip_helpers;
 };
 
 static inline jay_inst *
@@ -582,6 +589,7 @@ _jay_SEND(jay_builder *b, const struct jayb_send_params p)
    info->uniform = p.uniform;
    info->bindless = p.bindless;
    info->pure = p.pure;
+   info->skip_helpers = p.skip_helpers;
    info->ex_desc_imm = p.ex_desc_imm;
    info->ex_mlen = lens[2];
    I->src[0] = jay_imm(((uint32_t) p.msg_desc) |

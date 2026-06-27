@@ -112,6 +112,7 @@ struct wsi_image_info {
     */
    uint32_t modifier_prop_count;
    struct VkDrmFormatModifierPropertiesEXT *modifier_props;
+   VkImageCompressionFixedRateFlagsEXT *img_compr_fixed_rate_flags;
 
    /* For buffer blit images, the linear stride in bytes */
    uint32_t linear_stride;
@@ -192,6 +193,7 @@ struct wsi_image {
 
    VkQueryPool query_pool;
    VkCommandBuffer *timestamp_cmd_buffers;
+   uint32_t query_pool_busy;
 };
 
 struct wsi_presentation_timing {
@@ -200,6 +202,8 @@ struct wsi_presentation_timing {
    uint64_t serial;
    uint64_t queue_done_time; /* GPU timestamp based. */
    uint64_t complete_time; /* Best effort timestamp we get from backend. */
+   uint64_t earliest_present_time; /* earliestPresentTime for GOOGLE timing. */
+   uint64_t present_margin; /* presentMargin for GOOGLE timing. */
    /* If we're rendering with IMMEDIATE, it's possible for images to IDLE long before they complete.
     * In this case, we have to ensure that queue_done_time is sampled at QueuePresentKHR time
     * before we recycle an image. */
@@ -212,6 +216,7 @@ struct wsi_image_timing_request {
    uint64_t                    serial;
    uint64_t                    time;
    VkPresentTimingInfoFlagsEXT flags;
+   VkPresentStageFlagsEXT      feedback;
 };
 
 struct wsi_swapchain {
@@ -265,12 +270,16 @@ struct wsi_swapchain {
    struct {
       mtx_t lock;
       bool active;
+      bool google_timing_mode; /* Use VK_GOOGLE_display_timing semantic */
 
       struct wsi_presentation_timing *timings;
       size_t timings_capacity;
       size_t timings_count;
 
       size_t serial;
+
+      /* Timestamp of most recently presented frame. */
+      uint64_t latest_present_time;
 
       /* Maps to Vulkan spec definitions. */
       uint64_t refresh_duration;

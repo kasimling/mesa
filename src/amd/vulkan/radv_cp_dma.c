@@ -9,11 +9,11 @@
  */
 
 #include "radv_cp_dma.h"
+#include "tools/radv_debug_hang.h"
+#include "tools/radv_sqtt.h"
 #include "radv_buffer.h"
 #include "radv_cs.h"
-#include "radv_debug.h"
 #include "radv_shader.h"
-#include "radv_sqtt.h"
 #include "sid.h"
 
 /* Set this if you want the 3D engine to wait until CP DMA is done.
@@ -224,11 +224,10 @@ radv_cp_dma_realign_engine(struct radv_cmd_buffer *cmd_buffer, unsigned size)
    uint32_t offset;
    unsigned dma_flags = 0;
    unsigned buf_size = SI_CPDMA_ALIGNMENT * 2;
-   void *ptr;
 
    assert(size < SI_CPDMA_ALIGNMENT);
 
-   radv_cmd_buffer_upload_alloc(cmd_buffer, buf_size, &offset, &ptr);
+   radv_cmd_buffer_upload_alloc(cmd_buffer, buf_size, &offset, NULL);
 
    va = radv_buffer_get_va(cmd_buffer->upload.upload_bo);
    va += offset;

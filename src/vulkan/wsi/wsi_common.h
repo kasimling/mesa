@@ -74,6 +74,7 @@ struct wsi_device {
 
    bool has_import_memory_host;
    bool has_timeline_semaphore;
+   bool has_host_query_reset;
 
    /** Whether the device uses 32bpp formats for 24bpp
     *
@@ -213,6 +214,7 @@ struct wsi_device {
    WSI_CB(CmdCopyImage);
    WSI_CB(CmdCopyImageToBuffer);
    WSI_CB(CmdResetQueryPool);
+   WSI_CB(ResetQueryPoolEXT);
    WSI_CB(CmdWriteTimestamp);
    WSI_CB(CreateBuffer);
    WSI_CB(CreateCommandPool);
@@ -334,6 +336,9 @@ wsi_common_create_swapchain_image(const struct wsi_device *wsi,
 
 VkImageUsageFlags
 wsi_caps_get_image_usage(void);
+
+bool
+wsi_instance_supports_google_display_timing(const struct vk_instance *instance);
 
 bool
 wsi_device_supports_explicit_sync(struct wsi_device *device);

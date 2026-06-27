@@ -16,12 +16,11 @@
 #define VG(x) ((void)0)
 #endif
 
-#include "radv_debug.h"
+#include "tools/radv_debug.h"
+#include "tools/radv_debug_hang.h"
 #include "radv_entrypoints.h"
 #include "radv_instance.h"
 #include "radv_wsi.h"
-
-#include "util/driconf.h"
 
 #include "vk_instance.h"
 #include "vk_log.h"
@@ -176,6 +175,7 @@ radv_get_perftest_option_name(int id)
 static const struct debug_control trace_options[] = {
    {"rgp", RADV_TRACE_MODE_RGP},
    {"rra", RADV_TRACE_MODE_RRA},
+   {"rti", RADV_TRACE_MODE_RTI},
    {"ctxroll", RADV_TRACE_MODE_CTX_ROLLS},
    {NULL, 0},
 };

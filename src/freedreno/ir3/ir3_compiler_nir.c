@@ -1247,7 +1247,7 @@ emit_intrinsic_copy_global_to_uniform(struct ir3_context *ctx,
 
    struct ir3_instruction *a1 = NULL;
    unsigned dst_imm = dst;
-   if (dst > 256) {
+   if (dst >= 256) {
       a1 = ir3_create_addr1(&ctx->build, dst);
       dst_imm = 0;
    }
@@ -3508,6 +3508,20 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
       array_insert(ctx->block, ctx->block->keeps, ldc);
       break;
    }
+   case nir_intrinsic_resbase_ir3: {
+      struct ir3_instruction *ibo = ir3_ssbo_to_ibo(ctx, intr->src[0]);
+      struct ir3_instruction *resbase = ir3_RESBASE(b, ibo, 0);
+      resbase->cat6.iim_val = 1;
+      resbase->cat6.d = 1;
+      resbase->cat6.type = TYPE_U32;
+      resbase->cat6.typed = false;
+      /* resbase has no writemask and always writes out 2 components */
+      resbase->dsts[0]->wrmask = MASK(2);
+      ir3_handle_bindless_cat6(resbase, intr->src[0]);
+      ir3_handle_nonuniform(resbase, intr);
+      ir3_split_dest(b, dst, resbase, 0, 2);
+      break;
+   }
    case nir_intrinsic_rotate:
    case nir_intrinsic_shuffle_up_uniform_ir3:
    case nir_intrinsic_shuffle_down_uniform_ir3:
@@ -3595,7 +3609,6 @@ get_tex_dest_type(nir_tex_instr *tex)
    case nir_type_bool32:
    case nir_type_uint32:
       return TYPE_U32;
-   case nir_type_bool16:
    case nir_type_uint16:
       return TYPE_U16;
    case nir_type_invalid:
@@ -6225,9 +6238,9 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
    if (so->type == MESA_SHADER_FRAGMENT) {
       so->empty = is_empty(ir) && so->outputs_count == 0 &&
                   so->num_sampler_prefetch == 0;
-      so->writes_only_color = !ctx->s->info.writes_memory && !so->has_kill &&
-                              !so->writes_pos && !so->writes_smask &&
-                              !so->writes_stencilref;
+      so->has_no_side_effects = !ctx->s->info.writes_memory;
+      so->has_no_ds_effects = !so->has_kill && !so->writes_pos &&
+                              !so->writes_smask && !so->writes_stencilref;
    }
 
    if (mesa_shader_stage_is_compute(so->type)) {

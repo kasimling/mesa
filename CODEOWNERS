@@ -141,6 +141,7 @@ gitlab-ci*.yml @eric
 /include/drm-uapi/i915_drm.h @kwg @llandwerlin @idr
 /include/pci_ids/i*_pci_ids.h @kwg @llandwerlin @idr
 /src/intel/ @kwg @llandwerlin @idr
+/src/intel/compiler/jay/ @alyssa @kwg
 /src/gallium/winsys/iris/ @kwg @llandwerlin @idr
 /src/gallium/drivers/iris/ @kwg @llandwerlin @idr
 /src/gallium/drivers/i915/ @anholt
@@ -177,5 +178,5 @@ gitlab-ci*.yml @eric
 /src/gallium/drivers/svga/ @brianp @charmainel
 /src/gallium/winsys/svga/ @thomash @drawat
 
-# Rust util: peripherally uploaded to crates.io
-src/util/rust @gurchetansingh @aruby @jmacnak @dextero1
+# Magma GPU experimental crate: peripherally uploaded to crates.io
+src/virtio/magma-gpu-rs @gurchetansingh @aruby @jmacnak @dextero1
