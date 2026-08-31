@@ -219,3 +219,5 @@ spec@!opengl 1.4@copy-pixels
 # uprev Piglit in Mesa
 KHR-GLES31.core.draw_indirect.advanced-twoPass-transformFeedback-elements
 
+# GS/XFB
+dEQP-VK.geometry.layered.cube_array.64_64_12.secondary_cmd_buffer

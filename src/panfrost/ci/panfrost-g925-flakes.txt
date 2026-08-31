@@ -86,3 +86,6 @@ dEQP-VK.subgroups.*
 
 # See Mesa bug #15880 ("panfrost: incomplete glCopyPixels() with feedback loop")
 spec@!opengl 1.4@copy-pixels
+
+# GS/XFB
+dEQP-VK.geometry.layered.cube_array.64_64_12.secondary_cmd_buffer
