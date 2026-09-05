@@ -36,7 +36,7 @@ def declare_options():
           "Enable fragmentStoresAndAtomics and vertexPipelineStoresAndAtomics on any "
           "architecture. (This may not work reliably and is for debug purposes only!)",
           c_name="force_enable_shader_atomics"),
-        B("panvk_enable_gs_xfb", False,
+        B("panvk_enable_gs_xfb", True,
           "Advertise experimental support for geometryShader and "
           "transformFeedback features",
           c_name="enable_gs_xfb"),
